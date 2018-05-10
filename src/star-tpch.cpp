@@ -115,7 +115,7 @@ bool build_linear_ht(HashTable& ht, Table& table, int key_offset,
        i += table.tuple_size) {
     // enum the key in the table
     key = *(uint*)(table.start + i + key_offset);
-    if (key < 1000) continue;
+    //  if (key >= 10000000) continue;
     // compute the hash value
     hash = ((uint)(key * table_factor)) >> ht.shift;
     offset = hash * ht.tuple_size;
@@ -404,6 +404,7 @@ bool LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
       v_ht_cell_offset, v_ht_addr4, v_ht_addr, v_left_size, v_done,
       v_have_tuple = _mm256_set1_epi32(0), zero256 = _mm256_set1_epi32(0),
       v_factor = _mm256_set1_epi32(table_factor), v_cell_hash,
+      v_new_cells = _mm256_set1_epi32(-1), v_bucket_pass = _mm256_set1_epi32(0),
       v_bucket_offset = _mm256_set1_epi32(0), v_join_id = _mm256_set1_epi32(0),
       v_base_offset, v_offset, v_addr_offset;
   const uint32_t offset_index = 0x76543210, tuple_scale = 8;
@@ -451,6 +452,8 @@ bool LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
     if (cur < pb->tuple_num) {
       ///////// step 1: load new tuples' address offsets
       v_next_cell = _mm256_cmpeq_epi32(v_have_tuple, zero256);
+      // new cells from new tuples
+      v_new_cells = _mm256_or_si256(v_new_cells, v_next_cell);
       uint32_t res32 = _mm256_movemask_epi8(v_next_cell);
       // load new address offsets according to the mask from v_have_tuple
       uint32_t mk = _pdep_u32(offset_index, res32);  // deposit contiguous masks
@@ -549,11 +552,12 @@ bool LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
      */
     __m256i right_index =
         _mm256_i32gather_epi32(tuple_cell_offset, v_join_id, 4);
-
+    // guarantee valid cells from valid tuples
+    v_new_cells = _mm256_and_si256(v_new_cells, v_have_tuple);
     // gather cell values in new tuples
     v_tuple_cell = _mm256_mask_i32gather_epi32(
         v_tuple_cell, start_addr, _mm256_add_epi32(v_addr_offset, right_index),
-        v_have_tuple, 1);
+        v_new_cells, 1);
     ////// step 3: load new values in hash tables
     // get rid of invalid cells
     __m256i v_invalid = _mm256_cmpeq_epi32(v_tuple_cell, null_int);
@@ -569,9 +573,11 @@ bool LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
     ////
     // get the position in the hash table according to hash values
     v_ht_pos = _mm256_mullo_epi32(v_cell_hash, v_left_size);
-    v_ht_pos = _mm256_add_epi32(v_ht_pos, v_ht_cell_offset);
     ////// enum each cell in the bucket of the hash table
+    v_bucket_offset = _mm256_add_epi32(v_bucket_offset, v_left_size);
+    v_bucket_offset = _mm256_andnot_si256(v_new_cells, v_bucket_offset);
     v_ht_pos = _mm256_add_epi32(v_ht_pos, v_bucket_offset);
+    v_ht_pos = _mm256_add_epi32(v_ht_pos, v_ht_cell_offset);
 
     __m256i v_ht_pos_644 = _mm256_cvtepu32_epi64(
         _mm_load_si128(reinterpret_cast<__m128i*>(&ht_pos[4])));
@@ -613,20 +619,33 @@ bool LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
       }
     }
 #endif
-    v_join_id = _mm256_add_epi32(v_join_id, v_one);
+    // the bucket is over if ht cells =-1 or early break due to match
+    // then process next buckets (increase join_id and load new cells)
+    // or process next tuples
+    // or abort
+    __m256i v_bucket_over =
+        _mm256_or_si256(_mm256_cmpeq_epi32(ht_cell, neg_one), v_matches);
+    v_join_id =
+        _mm256_add_epi32(v_join_id, _mm256_and_si256(v_bucket_over, v_one));
+    v_new_cells = v_bucket_over;
+    // the bucket is passed once there is a match
+    v_bucket_pass = _mm256_or_si256(v_bucket_pass, v_matches);
+    //   v_join_id = _mm256_add_epi32(v_join_id, v_one);
     // once there is a match, this join is passed
     // v_pass = _mm256_or_si256(v_pass, v_matches);
     // normally done = cell is empty & join_id == join_num
-    v_done =
-        _mm256_and_si256(v_matches, _mm256_cmpeq_epi32(v_join_id, v_join_num));
-    // abort = cell is empty & !pass
-    v_abort = _mm256_andnot_si256(v_matches, neg_one);
+    v_done = _mm256_and_si256(v_bucket_pass,
+                              _mm256_cmpeq_epi32(v_join_id, v_join_num));
+    // the bucket is over but not passed
+    v_abort = _mm256_andnot_si256(v_bucket_pass, v_bucket_over);
 
     // have_tuple = !need_tuple & have_tuple
     v_have_tuple =
         _mm256_andnot_si256(_mm256_or_si256(v_done, v_abort), v_have_tuple);
     // initialize controlling parameters
     v_join_id = _mm256_and_si256(v_join_id, v_have_tuple);
+    // initialize parameters for new buckets
+    v_bucket_pass = _mm256_andnot_si256(v_new_cells, v_bucket_pass);
 #if RESULTS
     for (int i = 0; i < tuple_scale; ++i) {
       if (done[i]) {
@@ -895,7 +914,7 @@ int main() {
   table_factor = (rand() << 1) | 1;
   cout << "table_factor = " << table_factor << endl;
 //  table_factor = (rand() << 1) | 1;
-// cout << "table_factor = " << table_factor << endl;
+//  cout << "table_factor = " << table_factor << endl;
 //  table_factor = (rand() << 1) | 1;
 //  cout << "table_factor = " << table_factor << endl;
 
