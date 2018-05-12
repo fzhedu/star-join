@@ -45,12 +45,12 @@ struct HashTable {
   int shift;
   int probe_offset;
 }* ht[10];
-
+#define WORDSIZE 4
 unsigned int table_factor = 1;
 #define OVER_FLOW 2147479552  // 2^31 - 4096
 #define OVER 2147475456       // =OVER_FLOW- 4096
 typedef unsigned int uint32_t;
-
+#define EARLYBREAK 1
 // typedef unsigned long long uint64_t;
 // b
 /*
@@ -116,7 +116,7 @@ bool build_linear_ht(HashTable& ht, Table& table, int key_offset,
     // enum the key in the table
     key = *(uint*)(table.start + i + key_offset);
     // set filter
-    // if (key >= 10000) continue;
+    // if (key >= 10) continue;
     // compute the hash value
     hash = ((uint)(key * table_factor)) >> ht.shift;
     offset = hash * ht.tuple_size;
@@ -225,17 +225,18 @@ void test(Table* test_table, void* addr, int off) {
 
 bool LinearHandProbe(Table* pb, HashTable** ht, int ht_num) {
   bool tmp = true;
-  uint key[10], hash = 0, ht_off, cell_equal[10][10], num = 0;
+  uint tuple_key[10], hash = 0, ht_off, cell_equal[16][8], num = 0, result[16];
   void* probe_tuple_start = NULL;  // attention!!!
   memset(cell_equal, 0, 100);
-
+  FILE* fp;
+  fp = fopen("hand.csv", "wr");
   for (lld pb_off = 0; pb_off < pb->tuple_num * pb->tuple_size;
        pb_off += pb->tuple_size) {
     tmp = true;
-    probe_tuple_start = (uint*)(pb->start + pb_off);
+    probe_tuple_start = (pb->start + pb_off);
     for (int j = 0; j < ht_num && tmp; ++j) {
-      key[j] = *(uint*)(probe_tuple_start + ht[j]->probe_offset);
-      hash = ((uint)(key[j] * table_factor)) >> ht[j]->shift;
+      tuple_key[j] = *(uint*)(probe_tuple_start + ht[j]->probe_offset);
+      hash = ((uint)(tuple_key[j] * table_factor)) >> ht[j]->shift;
       // lay at the hash table
       assert(hash <= ht[j]->slot_num);
       ht_off = hash * ht[j]->tuple_size;
@@ -243,21 +244,32 @@ bool LinearHandProbe(Table* pb, HashTable** ht, int ht_num) {
 
       // probe each bucket
       while (*(int*)(ht[j]->addr + ht_off + ht[j]->key_offset) != -1) {
-        if (key[j] == *(uint*)(ht[j]->addr + ht_off + ht[j]->key_offset)) {
+        if (tuple_key[j] ==
+            *(uint*)(ht[j]->addr + ht_off + ht[j]->key_offset)) {
           ++cell_equal[j][0];
-          cell_equal[j][cell_equal[j][0]] = ht_off;
+          cell_equal[j][1] =
+              *(int*)(ht[j]->addr + ht_off + ht[j]->key_offset + WORDSIZE);
+#if EARLYBREAK
+          break;
+#endif
         }
         ht_off += ht[j]->tuple_size;
       }
-      // if the cell does not match anyone
       if (cell_equal[j][0] == 0) {
         tmp = false;
       }
     }
-
+    if (tmp) {
+      cell_equal[ht_num][1] = *(uint*)(probe_tuple_start + WORDSIZE * ht_num);
+      for (int i = 0; i < ht_num; ++i) {
+        fprintf(fp, "%d,", cell_equal[i][1]);
+      }
+      fprintf(fp, "%d\n", cell_equal[ht_num][1]);
+    }
     num += tmp;
   }
-  cout << "probe result = " << num << endl;
+  cout << "LinearHandProbe result = " << num << endl;
+  fclose(fp);
   return true;
 }
 bool HandProbe(Table* pb, HashTable** ht, int ht_num) {
@@ -332,10 +344,11 @@ char* ProbeTuple(void* src, int src_size, HashTable** ht, int ht_num, int cur,
   return NULL;
 }
 
-char* LinearProbeTuple(void* src, int src_size, HashTable** ht, int ht_num,
-                       int cur, int& ret_size, char output[][128]) {
-  char* res;
+uint32_t* LinearProbeTuple(void* src, int src_size, HashTable** ht, int ht_num,
+                           int cur, int& ret_size, uint32_t output[][16]) {
+  uint32_t* res;
   void* start;
+  bool tmp = false;
   if (ht_num == cur + 1) {
     uint key = *(uint*)(src + ht[cur]->probe_offset);
     uint hash = (uint)(key * table_factor) >> ht[cur]->shift;
@@ -343,12 +356,22 @@ char* LinearProbeTuple(void* src, int src_size, HashTable** ht, int ht_num,
     while (*(int*)(ht[cur]->addr + ht_off + ht[cur]->key_offset) != -1) {
       if (key == *(uint*)(ht[cur]->addr + ht_off + ht[cur]->key_offset)) {
 #if RESULTS
+#if MEMCPY
         memcpy(output[cur], src, src_size);
         memcpy(output[cur] + src_size, ht[cur]->addr + ht_off,
                ht[cur]->tuple_size);
-#endif
         ret_size = src_size + ht[cur]->tuple_size;
         return output[cur];
+#else
+        output[0][ht_num] = *(uint*)(src + WORDSIZE * ht_num);
+        output[0][cur] =
+            *(uint*)(ht[cur]->addr + ht_off + ht[cur]->key_offset + WORDSIZE);
+        tmp = true;
+#if EARLYBREAK
+        return output[0];
+#endif
+#endif
+#endif
       }
       ht_off += ht[cur]->tuple_size;
     }
@@ -365,23 +388,39 @@ char* LinearProbeTuple(void* src, int src_size, HashTable** ht, int ht_num,
     while (*(int*)(ht[cur]->addr + ht_off + ht[cur]->key_offset) != -1) {
       if (key == *(uint*)(ht[cur]->addr + ht_off + ht[cur]->key_offset)) {
 #if RESULTS
+#if MEMCPY
         memcpy(output[cur], res, ret_size);
         memcpy(output[cur] + ret_size, ht[cur]->addr + ht_off,
                ht[cur]->tuple_size);
-#endif
         ret_size = ret_size + ht[cur]->tuple_size;
         return output[cur];
+#else
+        output[0][cur] =
+            *(uint*)(ht[cur]->addr + ht_off + ht[cur]->key_offset + WORDSIZE);
+        tmp = true;
+#if EARLYBREAK
+        return output[0];
+#endif
+#endif
+#endif
       }
       ht_off += ht[cur]->tuple_size;
     }
   }
+#if !EARLYBREAK
+  if (tmp) {
+    return output[0];
+  }
+#endif
   return NULL;
 }
 bool TupleAtATimeProbe(Table* pb, HashTable** ht, int ht_num) {
   int ret_size, len = 128;
-  char* res;
+  uint32_t* res;
   lld num = 0;
-  char output[10][128];
+  uint32_t output[8][16];
+  FILE* fp;
+  fp = fopen("tuple.csv", "wr");
   for (lld i = 0, off = 0; i < pb->tuple_num; ++i, off += pb->tuple_size) {
     ret_size = 0;
     //    res = ProbeTuple(pb->start + off, pb->tuple_size, ht, ht_num, 0,
@@ -391,10 +430,14 @@ bool TupleAtATimeProbe(Table* pb, HashTable** ht, int ht_num) {
                            ret_size, output);
     if (res) {
       ++num;
+      for (int j = 0; j < ht_num; ++j) {
+        fprintf(fp, "%d,", output[0][j]);
+      }
+      fprintf(fp, "%d\n", output[0][ht_num]);
     }
   }
   cout << "TupleAtATimeProbe qualified tuples = " << num << endl;
-
+  fclose(fp);
   return true;
 }
 // use short mask to avoid long mask
@@ -403,12 +446,12 @@ bool Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
   uint16_t vector_scale = 16, new_add;
   __mmask16 m_bucket_pass, m_done, m_match, m_abort, m_have_tuple = 0,
                                                      m_new_cells = -1;
-  __m512i v_offset = _mm512_set1_epi32(0), v_addr_offset,
+  __m512i v_offset = _mm512_set1_epi32(0), v_addr_offset = _mm512_set1_epi32(0),
           v_join_num = _mm512_set1_epi32(ht_num),
           v_base_offset_upper =
               _mm512_set1_epi32(pb->tuple_num * pb->tuple_size),
-          v_ht_addr4, v_ht_addr, v_tuple_cell, right_index, v_base_offset,
-          v_left_size, v_bucket_offset, ht_cell,
+          v_ht_addr4, v_ht_addr, v_tuple_cell = _mm512_set1_epi32(0),
+          right_index, v_base_offset, v_left_size, v_bucket_offset, ht_cell,
           v_factor = _mm512_set1_epi32(table_factor), v_ht_cell_offset, v_shift,
           v_buckets_minus_1, v_cell_hash, v_ht_pos,
           v_neg_one512 = _mm512_set1_epi32(-1),
@@ -416,9 +459,9 @@ bool Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
           v_one = _mm512_set1_epi32(1);
   __attribute__((aligned(32)))
   uint32_t cur_offset = 0,
-           *ht_pos, *join_id, base_off[32], tuple_cell_offset[16] = {0},
-           left_size[16] = {0}, ht_cell_offset[16] = {0},
-           buckets_minus_1[16] = {0}, shift[16] = {0};
+           *addr_offset, temp_payloads[16][16] = {0}, *ht_pos, *join_id,
+           base_off[32], tuple_cell_offset[16] = {0}, left_size[16] = {0},
+           ht_cell_offset[16] = {0}, buckets_minus_1[16] = {0}, shift[16] = {0};
   __attribute__((aligned(32))) void * *ht_addr, **ht_addr4;
   __attribute__((aligned(32))) uint64_t htp[16] = {0};
 
@@ -434,22 +477,29 @@ bool Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
     htp[i] = (uint64_t)ht[i]->addr;
   }
   ht_pos = (uint32_t*)&v_ht_pos;
-  join_id = (int32_t*)&v_join_id;
+  join_id = (uint32_t*)&v_join_id;
   ht_addr = (void**)&v_ht_addr;
   ht_addr4 = (void**)&v_ht_addr4;
+  addr_offset = (uint32_t*)&v_addr_offset;
+
   __m256i v_zero256 = _mm256_set1_epi32(0);
   lld equal_num = 0;
   v_base_offset = _mm512_load_si512((__m512i*)(&base_off));
 
+  FILE* fp;
+  fp = fopen("simd512.csv", "wr");
+  int times = 0;
   for (lld cur = 0; cur < pb->tuple_num || m_have_tuple;) {
     ///////// step 1: load new tuples' address offsets
+
     v_offset = _mm512_add_epi32(_mm512_set1_epi32(cur_offset), v_base_offset);
     v_addr_offset = _mm512_mask_expand_epi32(
         v_addr_offset, _mm512_knot(m_have_tuple), v_offset);
     // count the number of empty tuples
     new_add = _mm_popcnt_u32(_mm512_knot(m_have_tuple));
-    cur = cur + new_add;
+    assert(new_add <= vector_scale);
     cur_offset = cur_offset + base_off[new_add];
+    cur = cur + new_add;
     m_have_tuple = _mm512_cmpgt_epi32_mask(v_base_offset_upper, v_addr_offset);
     /////// step 2: load new cells from tuples
     /*
@@ -492,13 +542,13 @@ bool Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
         _mm256_load_si256(reinterpret_cast<__m256i*>(&join_id[8])), htp, 8);
     v_ht_addr = _mm512_i32gather_epi64(
         _mm256_load_si256(reinterpret_cast<__m256i*>(join_id)), htp, 8);
-
-    __m256i a = _mm512_mask_i64gather_epi32(
-        v_zero256, m_have_tuple >> 8,
-        _mm512_add_epi64(v_ht_pos_644, v_ht_addr4), 0, 1);
-    __m256i b = _mm512_mask_i64gather_epi32(
-        v_zero256, m_have_tuple, _mm512_add_epi64(v_ht_pos_64, v_ht_addr), 0,
-        1);
+    v_ht_addr4 = _mm512_add_epi64(v_ht_pos_644, v_ht_addr4);
+    v_ht_addr = _mm512_add_epi64(v_ht_pos_64, v_ht_addr);
+    // attention!!! should (m_have_tuple>>8)
+    __m256i a = _mm512_mask_i64gather_epi32(v_zero256, (m_have_tuple >> 8),
+                                            v_ht_addr4, 0, 1);
+    __m256i b =
+        _mm512_mask_i64gather_epi32(v_zero256, m_have_tuple, v_ht_addr, 0, 1);
     // the first parameter should be at the lower position, and the second one
     // should lay at the upper position, and the third must be 1
     ht_cell = _mm512_inserti32x8(_mm512_castsi256_si512(b), a, 1);
@@ -511,7 +561,9 @@ bool Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
     // or process next tuples
     // or abort
     m_new_cells = _mm512_cmpeq_epi32_mask(ht_cell, v_neg_one512);
+#if EARLYBREAK
     m_new_cells = _mm512_kor(m_new_cells, m_match);
+#endif
     v_join_id = _mm512_mask_add_epi32(v_join_id, m_new_cells, v_join_id, v_one);
 
     m_bucket_pass = _mm512_kor(m_bucket_pass, m_match);
@@ -520,10 +572,37 @@ bool Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
     m_abort = _mm512_kandn(m_bucket_pass, m_new_cells);
     m_have_tuple = _mm512_kandn(_mm512_kor(m_done, m_abort), m_have_tuple);
     v_join_id = _mm512_maskz_add_epi32(m_have_tuple, v_join_id, v_zero512);
+
     m_bucket_pass = _mm512_kandn(m_new_cells, m_bucket_pass);
     equal_num += _mm_popcnt_u32(m_done);
+#if RESULTS
+    int mid = vector_scale >> 1;
+    for (int i = 0; m_match && i < mid; ++i, m_match = (m_match >> 1)) {
+      if (m_match & 1) {
+        temp_payloads[i][join_id[i]] = *(uint32_t*)(WORDSIZE + ht_addr[i]);
+      }
+    }
+    for (int i = mid; m_match && i < vector_scale;
+         ++i, m_match = (m_match >> 1)) {
+      if (m_match & 1) {
+        temp_payloads[i][join_id[i]] =
+            *(uint32_t*)(WORDSIZE + ht_addr4[i - mid]);
+      }
+    }
+    for (int i = 0; m_done && i < vector_scale; ++i, m_done = (m_done >> 1)) {
+      if (m_done & 1) {
+        temp_payloads[i][ht_num] =
+            *(uint32_t*)(pb->start + addr_offset[i] + WORDSIZE * ht_num);
+        for (int j = 0; j < ht_num; ++j) {
+          fprintf(fp, "%d,", temp_payloads[i][j]);
+        }
+        fprintf(fp, "%d\n", temp_payloads[i][ht_num]);
+      }
+    }
   }
+#endif
   cout << "SIMD512Probe qualified tuples = " << equal_num << endl;
+  fclose(fp);
 
   return true;
 }
@@ -580,11 +659,14 @@ bool LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
   offset = (int32_t*)&v_offset;
   lld equal_num = 0;
   void* temp_result[8][8], *result_tuple;
+  uint32_t temp_payloads[8][8] = {0};
   result_tuple = malloc(128);
   __m256i null_int = _mm256_set1_epi32(NULL_INT);
   v_base_offset = _mm256_load_si256((__m256i*)(&base_off));
   uint32_t cur_offset = 0, new_add = 0, continue_mask = pb->tuple_num;
   void* start_addr = pb->start;
+  FILE* fp;
+  fp = fopen("simd256.csv", "wr");
   /*
    * when travel the tuples in the base table, pay attention to that the offset
    * maybe overflow u32int
@@ -669,12 +751,13 @@ bool LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
     v_ht_addr = _mm256_i32gather_epi64(
         htp, _mm_load_si128(reinterpret_cast<__m128i*>(join_id)), 8);
 
+    v_ht_addr4 = _mm256_add_epi64(v_ht_pos_644, v_ht_addr4);
+    v_ht_addr = _mm256_add_epi64(v_ht_pos_64, v_ht_addr);
     ht_cell = _mm256_set_m128i(
-        _mm256_mask_i64gather_epi32(
-            zero128, 0, _mm256_add_epi64(v_ht_pos_644, v_ht_addr4),
-            _mm_load_si128((__m128i*)(&have_tuple[4])), 1),
-        _mm256_mask_i64gather_epi32(zero128, 0,
-                                    _mm256_add_epi64(v_ht_pos_64, v_ht_addr),
+        _mm256_mask_i64gather_epi32(zero128, 0, v_ht_addr4,
+                                    _mm_load_si128((__m128i*)(&have_tuple[4])),
+                                    1),
+        _mm256_mask_i64gather_epi32(zero128, 0, v_ht_addr,
                                     _mm_load_si128((__m128i*)(have_tuple)), 1));
 
     //// step 4: compare
@@ -683,29 +766,15 @@ bool LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
     v_matches = _mm256_and_si256(_mm256_cmpeq_epi32(v_tuple_cell, ht_cell),
                                  v_have_tuple);
 
-// generate point pairs, note to use ==-1 or 0, otherwise the special
-// case may lead to errors (i.e. invalid block tuples)
-#if !RESULTS
-    int32_t* res = (int32_t*)&v_matches;
-    int mid = tuple_scale >> 1;
-    for (int i = 0; i < mid; ++i) {
-      if (res[i] == -1) {
-        temp_result[i][join_id[i]] = ht_addr[i];
-      }
-    }
-    for (int i = mid; i < tuple_scale; ++i) {
-      if (res[i] == -1) {
-        temp_result[i][join_id[i]] = ht_addr4[i - mid];
-      }
-    }
-#endif
     // the bucket is over if ht cells =-1 or early break due to match
     // so need to process new cells
     // then process next buckets (increase join_id and load new cells)
     // or process next tuples
     // or abort
-    v_new_cells =
-        _mm256_or_si256(_mm256_cmpeq_epi32(ht_cell, neg_one), v_matches);
+    v_new_cells = _mm256_cmpeq_epi32(ht_cell, neg_one);
+#if EARLYBREAK
+    v_new_cells = _mm256_or_si256(v_new_cells, v_matches);
+#endif
     v_join_id =
         _mm256_add_epi32(v_join_id, _mm256_and_si256(v_new_cells, v_one));
     // the bucket is passed once there is a match
@@ -726,24 +795,40 @@ bool LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
     v_join_id = _mm256_and_si256(v_join_id, v_have_tuple);
     // initialize parameters for new buckets
     v_bucket_pass = _mm256_andnot_si256(v_new_cells, v_bucket_pass);
-#if !RESULTS
-    for (int i = 0; i < tuple_scale; ++i) {
-      if (done[i]) {
-        ++equal_num;
-        temp_result[i][ht_num] = start_addr + addr_offset[i];
-        int copyed_bytes = 0;
-        for (int id = 0; id <= ht_num; ++id) {
-          memcpy(result_tuple + copyed_bytes, temp_result[i][id],
-                 left_size[id]);
-          copyed_bytes += left_size[id];
-        }
+    equal_num += (_mm_popcnt_u32(_mm256_movemask_epi8(v_done)) >> 2);
+// generate point pairs, note to use ==-1 or 0, otherwise the special
+// case may lead to errors (i.e. invalid block tuples)
+#if RESULTS
+    int32_t* res = (int32_t*)&v_matches;
+    int mid = (tuple_scale >> 1);
+    for (int i = 0; i < mid; ++i) {
+      if (res[i] == -1) {
+        //  temp_result[i][join_id[i]] = ht_addr[i];
+        temp_payloads[i][join_id[i]] = *(uint32_t*)(WORDSIZE + ht_addr[i]);
       }
     }
-#else
-    equal_num += (_mm_popcnt_u32(_mm256_movemask_epi8(v_done)) >> 2);
+    for (int i = mid; i < tuple_scale; ++i) {
+      if (res[i] == -1) {
+        //  temp_result[i][join_id[i]] = ht_addr4[i - mid];
+        temp_payloads[i][join_id[i]] =
+            *(uint32_t*)(WORDSIZE + ht_addr4[i - mid]);
+      }
+    }
+
+    for (int i = 0; i < tuple_scale; ++i) {
+      if (done[i]) {
+        temp_payloads[i][ht_num] =
+            *(uint32_t*)(start_addr + addr_offset[i] + WORDSIZE * ht_num);
+        for (int j = 0; j < ht_num; ++j) {
+          fprintf(fp, "%d,", temp_payloads[i][j]);
+        }
+        fprintf(fp, "%d\n", temp_payloads[i][ht_num]);
+      }
+    }
 #endif
   }
   cout << "SIMDProbe qualified tuples = " << equal_num << endl;
+  fclose(fp);
 
   return true;
 }
@@ -980,7 +1065,7 @@ bool SIMDProbe(Table* pb, HashTable** ht, int ht_num) {
       }
     }
 #else
-    equal_num += (_mm_popcnt_u32(_mm256_movemask_epi8(v_done)) >> 2);
+      equal_num += (_mm_popcnt_u32(_mm256_movemask_epi8(v_done)) >> 2);
 #endif
   }
   cout << "SIMDProbe qualified tuples = " << equal_num << endl;
@@ -1066,51 +1151,51 @@ int main() {
   tb[3] = &household_demographics;
   read_data_in_memory(&household_demographics);
 #else
-  Table part;
-  part.name = "part";
-  part.tuple_num = 2000000;
-  part.path = "/home/claims/data/tpc-h/sf10/1partition/T0G0P0";
-  part.raw_tuple_size = 8;
-  int array5[10] = {0, 4};
-  SetVectorValue(array5, 2, part.offset);
-  int array6[10] = {4, 4};
-  SetVectorValue(array6, 2, part.size);
-  part.tuple_size = SumOfVector(part.size);
-  tb[0] = &part;
-  read_data_in_memory(&part);
-  //  test(&part, part.start, 0);
+    Table part;
+    part.name = "part";
+    part.tuple_num = 2000000;
+    part.path = "/home/claims/data/tpc-h/sf10/1partition/T0G0P0";
+    part.raw_tuple_size = 8;
+    int array5[10] = {0, 4};
+    SetVectorValue(array5, 2, part.offset);
+    int array6[10] = {4, 4};
+    SetVectorValue(array6, 2, part.size);
+    part.tuple_size = SumOfVector(part.size);
+    tb[0] = &part;
+    read_data_in_memory(&part);
+    //  test(&part, part.start, 0);
 
-  Table supplier;
-  supplier.name = "supplier";
-  supplier.tuple_num = 100000;
-  supplier.path = "/home/claims/data/tpc-h/sf10/1partition/T2G0P0";
-  supplier.raw_tuple_size = 8;
-  int array7[10] = {0, 4};
-  SetVectorValue(array7, 2, supplier.offset);
-  int array8[10] = {4, 4};
-  SetVectorValue(array8, 2, supplier.size);
-  supplier.tuple_size = SumOfVector(supplier.size);
-  tb[1] = &supplier;
-  read_data_in_memory(&supplier);
-  //  test(&supplier, supplier.start, 0);
-  /*
-  L_ORDERKEY,
-  L_PARTKEY,
-  L_SUPPKEY,
-  L_LINENUMBER
-   */
-  Table lineitem;
-  lineitem.name = "lineitem";
-  lineitem.tuple_num = 59986052;
-  lineitem.path = "/home/claims/data/tpc-h/sf10/1partition/T6G0P0";
-  lineitem.raw_tuple_size = 16;
-  int array9[10] = {4, 8, 12};
-  SetVectorValue(array9, 3, lineitem.offset);
-  int array99[10] = {4, 4, 4};
-  SetVectorValue(array99, 3, lineitem.size);
-  lineitem.tuple_size = SumOfVector(lineitem.size);
-  tb[2] = &lineitem;
-  read_data_in_memory(&lineitem);
+    Table supplier;
+    supplier.name = "supplier";
+    supplier.tuple_num = 100000;
+    supplier.path = "/home/claims/data/tpc-h/sf10/1partition/T2G0P0";
+    supplier.raw_tuple_size = 8;
+    int array7[10] = {0, 4};
+    SetVectorValue(array7, 2, supplier.offset);
+    int array8[10] = {4, 4};
+    SetVectorValue(array8, 2, supplier.size);
+    supplier.tuple_size = SumOfVector(supplier.size);
+    tb[1] = &supplier;
+    read_data_in_memory(&supplier);
+    //  test(&supplier, supplier.start, 0);
+    /*
+    L_ORDERKEY,
+    L_PARTKEY,
+    L_SUPPKEY,
+    L_LINENUMBER
+     */
+    Table lineitem;
+    lineitem.name = "lineitem";
+    lineitem.tuple_num = 59986052;
+    lineitem.path = "/home/claims/data/tpc-h/sf10/1partition/T6G0P0";
+    lineitem.raw_tuple_size = 16;
+    int array9[10] = {4, 8, 12};
+    SetVectorValue(array9, 3, lineitem.offset);
+    int array99[10] = {4, 4, 4};
+    SetVectorValue(array99, 3, lineitem.size);
+    lineitem.tuple_size = SumOfVector(lineitem.size);
+    tb[2] = &lineitem;
+    read_data_in_memory(&lineitem);
 // test(&lineitem, lineitem.start, 0);
 #endif
   gettimeofday(&t2, NULL);
@@ -1136,15 +1221,15 @@ int main() {
   store_sales.tuple_num = 178956000;
 // store_sales.tuple_num = 100000;
 #else
-  HashTable ht_part;
-  build_linear_ht(ht_part, part, 0, 0);
-  travel_linear_ht(ht_part);
-  ht[0] = &ht_part;
+    HashTable ht_part;
+    build_linear_ht(ht_part, part, 0, 0);
+    travel_linear_ht(ht_part);
+    ht[0] = &ht_part;
 
-  HashTable ht_supplier;
-  build_linear_ht(ht_supplier, supplier, 0, 4);
-  travel_linear_ht(ht_supplier);
-  ht[1] = &ht_supplier;
+    HashTable ht_supplier;
+    build_linear_ht(ht_supplier, supplier, 0, 4);
+    travel_linear_ht(ht_supplier);
+    ht[1] = &ht_supplier;
 #endif
   gettimeofday(&t2, NULL);
   deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
@@ -1183,43 +1268,43 @@ int main() {
     printf("++++ build hashtable costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
   }
 #else
-  int times = 5;
-  for (int t = 0; t < times; ++t) {
-    gettimeofday(&t1, NULL);
-    // LinearHandProbe(&lineitem, ht, 2);
-    // TupleAtATimeProbe(&lineitem, ht, 2);
-    Linear512Probe(&lineitem, ht, 2);
-    gettimeofday(&t2, NULL);
-    deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-    printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
-  }
-  for (int t = 0; t < times; ++t) {
-    gettimeofday(&t1, NULL);
-    // LinearHandProbe(&lineitem, ht, 2);
-    // TupleAtATimeProbe(&lineitem, ht, 2);
-    LinearSIMDProbe(&lineitem, ht, 2);
-    gettimeofday(&t2, NULL);
-    deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-    printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
-  }
-  for (int t = 0; t < times; ++t) {
-    gettimeofday(&t1, NULL);
-    // LinearHandProbe(&lineitem, ht, 2);
-    TupleAtATimeProbe(&lineitem, ht, 2);
-    // SIMDProbe(&store_sales, ht, 3);
-    gettimeofday(&t2, NULL);
-    deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-    printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
-  }
-  for (int t = 0; t < times; ++t) {
-    gettimeofday(&t1, NULL);
-    LinearHandProbe(&lineitem, ht, 2);
-    // TupleAtATimeProbe(&store_sales, ht, 3);
-    // SIMDProbe(&store_sales, ht, 3);
-    gettimeofday(&t2, NULL);
-    deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-    printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
-  }
+    int times = 1;
+    for (int t = 0; t < times; ++t) {
+      gettimeofday(&t1, NULL);
+      // LinearHandProbe(&lineitem, ht, 2);
+      // TupleAtATimeProbe(&lineitem, ht, 2);
+      Linear512Probe(&lineitem, ht, 2);
+      gettimeofday(&t2, NULL);
+      deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
+      printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
+    }
+    for (int t = 0; t < times; ++t) {
+      gettimeofday(&t1, NULL);
+      // LinearHandProbe(&lineitem, ht, 2);
+      // TupleAtATimeProbe(&lineitem, ht, 2);
+      LinearSIMDProbe(&lineitem, ht, 2);
+      gettimeofday(&t2, NULL);
+      deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
+      printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
+    }
+    for (int t = 0; t < times; ++t) {
+      gettimeofday(&t1, NULL);
+      // LinearHandProbe(&lineitem, ht, 2);
+      TupleAtATimeProbe(&lineitem, ht, 2);
+      // SIMDProbe(&store_sales, ht, 3);
+      gettimeofday(&t2, NULL);
+      deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
+      printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
+    }
+    for (int t = 0; t < times; ++t) {
+      gettimeofday(&t1, NULL);
+      LinearHandProbe(&lineitem, ht, 2);
+      // TupleAtATimeProbe(&store_sales, ht, 3);
+      // SIMDProbe(&store_sales, ht, 3);
+      gettimeofday(&t2, NULL);
+      deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
+      printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
+    }
 #endif
   return 0;
 }
