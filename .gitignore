@@ -6,3 +6,6 @@ Debug/
 core.*
 *.out
 *.csv
+*.old
+*.perf
+*.data
