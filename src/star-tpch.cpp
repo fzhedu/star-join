@@ -24,8 +24,8 @@ typedef unsigned int uint;
 #define BLOCK_SIZE 65536
 #define RESULTS 1
 #define OUTPUT 0
-#define GATHERHT 1
-#define PREFETCH 1
+#define GATHERHT 0
+#define PREFETCH 0
 #define INVALID 2147483647
 #define _mm256_set_m128i(v0, v1) \
   _mm256_insertf128_si256(_mm256_castsi128_si256(v1), (v0), 1)
@@ -1171,8 +1171,12 @@ bool SIMDProbe(Table* pb, HashTable** ht, int ht_num) {
 
   return true;
 }
-int main() {
+int main(int argc, char** argv) {
   struct timeval t1, t2;
+  int times = 3;
+  if (argc > 1) {
+    times = atoi(argv[1]);
+  }
   int ht_num = 3;
   int deltaT = 0;
   gettimeofday(&t1, NULL);
@@ -1343,17 +1347,17 @@ int main() {
   HashTable ht_orders;
   build_linear_ht(ht_orders, orders, 0, 0);
   travel_linear_ht(ht_orders);
-  ht[0] = &ht_orders;
+  ht[1] = &ht_orders;
 
   HashTable ht_part;
   build_linear_ht(ht_part, part, 0, 4);
   travel_linear_ht(ht_part);
-  ht[1] = &ht_part;
+  ht[2] = &ht_part;
 
   HashTable ht_supplier;
   build_linear_ht(ht_supplier, supplier, 0, 8);
   travel_linear_ht(ht_supplier);
-  ht[2] = &ht_supplier;
+  ht[0] = &ht_supplier;
 
 #endif
   gettimeofday(&t2, NULL);
@@ -1393,7 +1397,6 @@ int main() {
     printf("++++ build hashtable costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
   }
 #else
-  int times = 3;
 #if 1
   for (int t = 0; t < times; ++t) {
     gettimeofday(&t1, NULL);
@@ -1413,6 +1416,7 @@ int main() {
     deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
     printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
   }
+#endif
   for (int t = 0; t < times; ++t) {
     gettimeofday(&t1, NULL);
     // LinearHandProbe(&lineitem, ht, 2);
@@ -1422,7 +1426,7 @@ int main() {
     deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
     printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
   }
-#endif
+#if 1
   for (int t = 0; t < times; ++t) {
     gettimeofday(&t1, NULL);
     LinearHandProbe(&lineitem, ht, ht_num);
@@ -1432,6 +1436,7 @@ int main() {
     deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
     printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
   }
+#endif
 #endif
   return 0;
 }
