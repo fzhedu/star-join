@@ -1,4 +1,5 @@
-
+#ifndef __SIMDTEST__
+#define __SIMDTEST__
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <stdio.h>
@@ -29,6 +30,7 @@ typedef unsigned int uint;
 #define INVALID 2147483647
 #define _mm256_set_m128i(v0, v1) \
   _mm256_insertf128_si256(_mm256_castsi128_si256(v1), (v0), 1)
+
 struct Table {
   string name;
   string path;
@@ -47,13 +49,24 @@ struct HashTable {
   void* addr;
   int shift;
   int probe_offset;
-}* ht[10];
+}* ht[100];
+typedef lld (*ProbeFunc)(Table* pb, HashTable** ht, int ht_num);
+struct ThreadArgs {
+  Table* tb;
+  ProbeFunc func;
+};
 #define WORDSIZE 4
 unsigned int table_factor = 1;
 #define OVER_FLOW 2147479552  // 2^31 - 4096
 #define OVER 2147475456       // =OVER_FLOW- 4096
 typedef unsigned int uint32_t;
 #define EARLYBREAK 1
+pthread_mutex_t mutex;
+lld global_probe_corsur = 0, global_matched = 0;
+#define probe_step 1024 * 1024
+int thread_num = 32;
+int ht_num = 4;
+int times = 3;
 // typedef unsigned long long uint64_t;
 // b
 /*
@@ -119,7 +132,7 @@ bool build_linear_ht(HashTable& ht, Table& table, int key_offset,
     // enum the key in the table
     key = *(uint*)(table.start + i + key_offset);
     // set filter
-    // if (key >= 100000) continue;
+    // if (key <= 10000) continue;
     // compute the hash value
     hash = ((uint)(key * table_factor)) >> ht.shift;
     offset = hash * ht.tuple_size;
@@ -196,6 +209,8 @@ bool read_data_in_memory(Table* table) {
   close(fd);
   table->start = addr;
   table->upper = table->tuple_num;  // special
+  cout << table->name << " tuple num =" << table->tuple_num << " but read "
+       << tuple_num << endl;
   assert(table->tuple_num == tuple_num);
   return true;
 }
@@ -218,7 +233,7 @@ void test(Table* test_table, void* addr, int off) {
   for (int i = 0; i < test_table->tuple_num; ++i) {
     int k = *(int*)(addr + (i * test_table->tuple_size) + off);
     if (k < 100) {
-      cout << k << endl;
+      cout << k << "  ";
       t++;
     }
     count++;
@@ -226,11 +241,11 @@ void test(Table* test_table, void* addr, int off) {
   cout << endl << count << " has " << t << endl;
 }
 
-bool LinearHandProbe(Table* pb, HashTable** ht, int ht_num) {
-  bool tmp = true;
-  uint tuple_key[10], hash = 0, ht_off, cell_equal[16][8], num = 0, result[16];
+lld LinearHandProbe(Table* pb, HashTable** ht, int ht_num) {
+  bool tmp = true, flag;
+  uint tuple_key[10], hash = 0, ht_off, cell_equal[16], num = 0, result[16];
   void* probe_tuple_start = NULL;  // attention!!!
-  memset(cell_equal, 0, 100);
+  memset(cell_equal, 0, 16);
 #if OUTPUT
   FILE* fp;
   fp = fopen("hand.csv", "wr");
@@ -245,28 +260,27 @@ bool LinearHandProbe(Table* pb, HashTable** ht, int ht_num) {
       // lay at the hash table
       // assert(hash <= ht[j]->slot_num);
       ht_off = hash * ht[j]->tuple_size;
-      cell_equal[j][0] = 0;
+      flag = false;
 
       // probe each bucket
       while (*(int*)(ht[j]->addr + ht_off + ht[j]->key_offset) != -1) {
         if (tuple_key[j] ==
             *(uint*)(ht[j]->addr + ht_off + ht[j]->key_offset)) {
-          ++cell_equal[j][0];
-          cell_equal[j][1] =
+          cell_equal[j] =
               *(int*)(ht[j]->addr + ht_off + ht[j]->key_offset + WORDSIZE);
+          flag = true;
 #if EARLYBREAK
           break;
 #endif
         }
         ht_off += ht[j]->tuple_size;
       }
-      if (cell_equal[j][0] == 0) {
-        tmp = false;
-      }
+
+      tmp = tmp & flag;
     }
 #if RESULTS
     if (tmp) {
-      cell_equal[ht_num][1] = *(uint*)(probe_tuple_start + WORDSIZE * ht_num);
+      cell_equal[ht_num] = *(uint*)(probe_tuple_start + WORDSIZE * ht_num);
 #if OUTPUT
       for (int i = 0; i < ht_num; ++i) {
         fprintf(fp, "%d,", cell_equal[i][1]);
@@ -277,13 +291,13 @@ bool LinearHandProbe(Table* pb, HashTable** ht, int ht_num) {
 #endif
     num += tmp;
   }
-  cout << "LinearHandProbe result = " << num << endl;
+// cout << "LinearHandProbe result = " << num << endl;
 #if OUTPUT
   fclose(fp);
 #endif
-  return true;
+  return num;
 }
-bool HandProbe(Table* pb, HashTable** ht, int ht_num) {
+lld HandProbe(Table* pb, HashTable** ht, int ht_num) {
   bool tmp = true;
   lld num = 0;
   int offset = 0, key[10];
@@ -314,8 +328,8 @@ bool HandProbe(Table* pb, HashTable** ht, int ht_num) {
     }
 #endif
   }
-  cout << "HandProbe qualified tuples = " << num << endl;
-  return true;
+  // cout << "HandProbe qualified tuples = " << num << endl;
+  return num;
 }
 char* ProbeTuple(void* src, int src_size, HashTable** ht, int ht_num, int cur,
                  int& ret_size, char output[][128]) {
@@ -425,7 +439,7 @@ uint32_t* LinearProbeTuple(void* src, int src_size, HashTable** ht, int ht_num,
 #endif
   return NULL;
 }
-bool TupleAtATimeProbe(Table* pb, HashTable** ht, int ht_num) {
+lld TupleAtATimeProbe(Table* pb, HashTable** ht, int ht_num) {
   int ret_size, len = 128;
   uint32_t* res;
   lld num = 0;
@@ -452,14 +466,14 @@ bool TupleAtATimeProbe(Table* pb, HashTable** ht, int ht_num) {
 #endif
     }
   }
-  cout << "TupleAtATimeProbe qualified tuples = " << num << endl;
+// cout << "TupleAtATimeProbe qualified tuples = " << num << endl;
 #if OUTPUT
   fclose(fp);
 #endif
-  return true;
+  return num;
 }
 // use short mask to avoid long mask
-bool Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
+lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
   uint16_t vector_scale = 16, new_add;
   __mmask16 m_bucket_pass, m_done, m_match, m_abort, m_have_tuple = 0,
                                                      m_new_cells = -1;
@@ -660,13 +674,13 @@ bool Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
     }
 #endif
   }
-  cout << "SIMD512Probe qualified tuples = " << equal_num << endl;
+// cout << "SIMD512Probe qualified tuples = " << equal_num << endl;
 #if OUTPUT
   fclose(fp);
 #endif
-  return true;
+  return equal_num;
 }
-bool LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
+lld LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
   __m256i v_pass,
       v_join_num = _mm256_set1_epi32(ht_num), v_one = _mm256_set1_epi32(1),
       v_tuple_cell, ht_cell, v_next_cell, v_matches, v_abort, v_shift, v_ht_pos,
@@ -925,14 +939,14 @@ bool LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
     }
 #endif
   }
-  cout << "SIMDProbe qualified tuples = " << equal_num << endl;
+// cout << "SIMDProbe qualified tuples = " << equal_num << endl;
 #if OUTPUT
   fclose(fp);
 #endif
-  return true;
+  return equal_num;
 }
 
-bool SIMDProbe(Table* pb, HashTable** ht, int ht_num) {
+lld SIMDProbe(Table* pb, HashTable** ht, int ht_num) {
   __m256i v_pass,
       v_join_num = _mm256_set1_epi32(ht_num), v_one = _mm256_set1_epi32(1),
       v_tuple_cell, ht_cell, v_next_cell, v_matches, v_abort, v_shift, v_ht_pos,
@@ -1167,276 +1181,64 @@ bool SIMDProbe(Table* pb, HashTable** ht, int ht_num) {
     equal_num += (_mm_popcnt_u32(_mm256_movemask_epi8(v_done)) >> 2);
 #endif
   }
-  cout << "SIMDProbe qualified tuples = " << equal_num << endl;
+  // cout << "SIMDProbe qualified tuples = " << equal_num << endl;
 
-  return true;
+  return equal_num;
 }
-int main(int argc, char** argv) {
+void* ThreadProbe(void* args) {
+  ThreadArgs* arg = (ThreadArgs*)args;
+  lld upper = 0, lower = 0, matched = 0;
+  Table* pb = new Table();
+  pb->tuple_size = arg->tb->tuple_size;
+  while (true) {
+    pthread_mutex_lock(&mutex);
+    global_probe_corsur = global_probe_corsur + probe_step;
+    upper = global_probe_corsur;
+    pthread_mutex_unlock(&mutex);
+    if (upper <= arg->tb->tuple_num) {
+      lower = upper - probe_step;
+    } else {
+      lower = upper - probe_step;
+      if (lower < arg->tb->tuple_num) {
+        upper = arg->tb->tuple_num;
+      } else {
+        break;
+      }
+    }
+    pb->tuple_num = upper - lower;
+    pb->start = arg->tb->start + lower * arg->tb->tuple_size;
+    matched += arg->func(pb, ht, ht_num);
+  }
+  pthread_mutex_lock(&mutex);
+  global_matched += matched;
+  pthread_mutex_unlock(&mutex);
+  return NULL;
+}
+void TestSet(Table* tb, string fun_name, int times, ProbeFunc func,
+             int thread_num) {
   struct timeval t1, t2;
-  int times = 3;
-  if (argc > 1) {
-    times = atoi(argv[1]);
-  }
-  int ht_num = 3;
+  pthread_t id[40];
   int deltaT = 0;
-  gettimeofday(&t1, NULL);
-  table_factor = (rand() << 1) | 1;
-  cout << "table_factor = " << table_factor << endl;
-//  table_factor = (rand() << 1) | 1;
-//  cout << "table_factor = " << table_factor << endl;
-//  table_factor = (rand() << 1) | 1;
-//  cout << "table_factor = " << table_factor << endl;
-
-#if TPCDS
-  Table store_sales;
-  store_sales.name = "store_sales";
-  store_sales.tuple_num = 287997024;
-  store_sales.path = "/home/claims/data/tpc-ds/sf100/1partition/T48G0P0";
-  store_sales.raw_tuple_size = 100;
-  int array[10] = {12, 28, 36};
-  SetVectorValue(array, 3, store_sales.offset);
-  int array1[10] = {4, 4, 4};
-  SetVectorValue(array1, 3, store_sales.size);
-  store_sales.tuple_size = SumOfVector(store_sales.size);
-  tb[0] = &store_sales;
-  read_data_in_memory(&store_sales);
-
-  Table time_dim;
-  time_dim.name = "time_dim";
-  time_dim.tuple_num = 86400;
-  time_dim.path = "/home/claims/data/tpc-ds/sf100/1partition/T12G0P0";
-  time_dim.raw_tuple_size = 124;
-  int array3[10] = {8};
-  SetVectorValue(array3, 1, time_dim.offset);
-  int array4[10] = {4};
-  SetVectorValue(array4, 1, time_dim.size);
-  time_dim.tuple_size = SumOfVector(time_dim.size);
-  tb[1] = &time_dim;
-  read_data_in_memory(&time_dim);
-
-  Table store;
-  store.name = "store";
-  store.tuple_num = 402;
-  store.path = "/home/claims/data/tpc-ds/sf100/1partition/T20G0P0";
-  store.raw_tuple_size = 788;
-  int array5[10] = {8};
-  SetVectorValue(array5, 1, store.offset);
-  int array6[10] = {4};
-  SetVectorValue(array6, 1, store.size);
-  store.tuple_size = SumOfVector(store.size);
-  tb[2] = &store;
-  read_data_in_memory(&store);
-
-  Table household_demographics;
-  household_demographics.name = "household_demographics";
-  household_demographics.tuple_num = 7200;
-  household_demographics.path =
-      "/home/claims/data/tpc-ds/sf100/1partition/T30G0P0";
-  household_demographics.raw_tuple_size = 40;
-  int array7[10] = {8};
-  SetVectorValue(array7, 1, household_demographics.offset);
-  int array8[10] = {4};
-  SetVectorValue(array8, 1, household_demographics.size);
-  household_demographics.tuple_size = SumOfVector(household_demographics.size);
-  tb[3] = &household_demographics;
-  read_data_in_memory(&household_demographics);
-
-  Table household_demographics;
-  household_demographics.name = "household_demographics";
-  household_demographics.tuple_num = 7200;
-  household_demographics.path =
-      "/home/claims/data/tpc-ds/sf100/1partition/T30G0P0";
-  household_demographics.raw_tuple_size = 40;
-  int array7[10] = {8};
-  SetVectorValue(array7, 1, household_demographics.offset);
-  int array8[10] = {4};
-  SetVectorValue(array8, 1, household_demographics.size);
-  household_demographics.tuple_size = SumOfVector(household_demographics.size);
-  tb[3] = &household_demographics;
-  read_data_in_memory(&household_demographics);
-#else
-  Table part;
-  part.name = "part";
-  part.tuple_num = 2000000;
-  part.path = "/home/claims/data/tpc-h/sf10/1partition/T0G0P0";
-  part.raw_tuple_size = 8;
-  int array5[10] = {0, 4};
-  SetVectorValue(array5, 2, part.offset);
-  int array6[10] = {4, 4};
-  SetVectorValue(array6, 2, part.size);
-  part.tuple_size = SumOfVector(part.size);
-  tb[0] = &part;
-  read_data_in_memory(&part);
-  //  test(&part, part.start, 0);
-
-  Table supplier;
-  supplier.name = "supplier";
-  supplier.tuple_num = 100000;
-  supplier.path = "/home/claims/data/tpc-h/sf10/1partition/T2G0P0";
-  supplier.raw_tuple_size = 8;
-  int array7[10] = {0, 4};
-  SetVectorValue(array7, 2, supplier.offset);
-  int array8[10] = {4, 4};
-  SetVectorValue(array8, 2, supplier.size);
-  supplier.tuple_size = SumOfVector(supplier.size);
-  tb[1] = &supplier;
-  read_data_in_memory(&supplier);
-  //  test(&supplier, supplier.start, 0);
-
-  Table orders;
-  orders.name = "orders";
-  orders.tuple_num = 15000000;
-  orders.path = "/home/claims/data/tpc-h/sf10/1partition/T4G0P0";
-  orders.raw_tuple_size = 8;
-  int array17[10] = {0, 4};
-  SetVectorValue(array17, 2, orders.offset);
-  int array18[10] = {4, 4};
-  SetVectorValue(array18, 2, orders.size);
-  orders.tuple_size = SumOfVector(orders.size);
-  tb[2] = &orders;
-  read_data_in_memory(&orders);
-  //  test(&orders, orders.start, 0);
-  /*
-  L_ORDERKEY,
-  L_PARTKEY,
-  L_SUPPKEY,
-  L_LINENUMBER
-   */
-  Table lineitem;
-  lineitem.name = "lineitem";
-  lineitem.tuple_num = 59986052;
-  lineitem.path = "/home/claims/data/tpc-h/sf10/1partition/T6G0P0";
-  lineitem.raw_tuple_size = 16;
-  int array9[10] = {0, 4, 8, 12};
-  SetVectorValue(array9, 4, lineitem.offset);
-  int array99[10] = {4, 4, 4, 4};
-  SetVectorValue(array99, 4, lineitem.size);
-  lineitem.tuple_size = SumOfVector(lineitem.size);
-  tb[3] = &lineitem;
-  read_data_in_memory(&lineitem);
-// test(&lineitem, lineitem.start, 0);
-#endif
-  gettimeofday(&t2, NULL);
-  deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-  printf("--------load table is over costs time (ms) = %lf\n",
-         deltaT * 1.0 / 1000);
-  gettimeofday(&t1, NULL);
-#if TPCDS
-  HashTable ht_time_dim;
-  build_ht(ht_time_dim, time_dim, 0, 0);
-  test(&time_dim, ht_time_dim.addr, 0);
-  ht[0] = &ht_time_dim;
-
-  HashTable ht_household_demographics;
-  build_ht(ht_household_demographics, household_demographics, 0, 4);
-  test(&household_demographics, ht_household_demographics.addr, 0);
-  ht[1] = &ht_household_demographics;
-
-  HashTable ht_store;
-  build_ht(ht_store, store, 0, 8);
-  test(&store, ht_store.addr, 0);
-  ht[2] = &ht_store;
-  store_sales.tuple_num = 178956000;
-// store_sales.tuple_num = 100000;
-#else
-
-  // orders.tuple_num = 500000;
-  // part.tuple_num = 100000;
-  // supplier.tuple_num = 50000;
-  // lineitem.tuple_num = 10000000;
-  HashTable ht_orders;
-  build_linear_ht(ht_orders, orders, 0, 0);
-  travel_linear_ht(ht_orders);
-  ht[1] = &ht_orders;
-
-  HashTable ht_part;
-  build_linear_ht(ht_part, part, 0, 4);
-  travel_linear_ht(ht_part);
-  ht[2] = &ht_part;
-
-  HashTable ht_supplier;
-  build_linear_ht(ht_supplier, supplier, 0, 8);
-  travel_linear_ht(ht_supplier);
-  ht[0] = &ht_supplier;
-
-#endif
-  gettimeofday(&t2, NULL);
-  deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-  printf("++++ build hashtable costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
-#if TPCDS
-  int times = 10;
+  ThreadArgs args;
+  args.tb = tb;
+  args.func = func;
   for (int t = 0; t < times; ++t) {
     gettimeofday(&t1, NULL);
+    global_probe_corsur = 0;
+    global_matched = 0;
+    for (int j = 0; j < thread_num; ++j) {
+      int ret = pthread_create(&id[j], NULL, ThreadProbe, (void*)&args);
+    }
+    for (int j = 0; j < thread_num; ++j) {
+      pthread_join(id[j], NULL);
+    }
+    cout << fun_name << " qualified tuples = " << global_matched << endl;
 
-    HandProbe(&store_sales, ht, 3);
-    // TupleAtATimeProbe(&store_sales, ht, 3);
-    // SIMDProbe(&store_sales, ht, 3);
-    gettimeofday(&t2, NULL);
-    deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-    printf("++++ build hashtable costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
-  }
-  for (int t = 0; t < times; ++t) {
-    gettimeofday(&t1, NULL);
-
-    // HandProbe(&store_sales, ht, 3);
-    TupleAtATimeProbe(&store_sales, ht, 3);
-    // SIMDProbe(&store_sales, ht, 3);
-    gettimeofday(&t2, NULL);
-    deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-    printf("++++ build hashtable costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
-  }
-  for (int t = 0; t < times; ++t) {
-    gettimeofday(&t1, NULL);
-
-    // HandProbe(&store_sales, ht, 3);
-    // TupleAtATimeProbe(&store_sales, ht, 3);
-    SIMDProbe(&store_sales, ht, 3);
-
-    gettimeofday(&t2, NULL);
-    deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-    printf("++++ build hashtable costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
-  }
-#else
-#if 1
-  for (int t = 0; t < times; ++t) {
-    gettimeofday(&t1, NULL);
-    // LinearHandProbe(&lineitem, ht, 2);
-    // TupleAtATimeProbe(&lineitem, ht, 2);
-    Linear512Probe(&lineitem, ht, ht_num);
+    //   Linear512Probe(&lineorder, ht, ht_num);
     gettimeofday(&t2, NULL);
     deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
     printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
   }
-  for (int t = 0; t < times; ++t) {
-    gettimeofday(&t1, NULL);
-    // LinearHandProbe(&lineitem, ht, 2);
-    // TupleAtATimeProbe(&lineitem, ht, 2);
-    LinearSIMDProbe(&lineitem, ht, ht_num);
-    gettimeofday(&t2, NULL);
-    deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-    printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
-  }
-#endif
-  for (int t = 0; t < times; ++t) {
-    gettimeofday(&t1, NULL);
-    // LinearHandProbe(&lineitem, ht, 2);
-    TupleAtATimeProbe(&lineitem, ht, ht_num);
-    // SIMDProbe(&store_sales, ht, 3);
-    gettimeofday(&t2, NULL);
-    deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-    printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
-  }
-#if 1
-  for (int t = 0; t < times; ++t) {
-    gettimeofday(&t1, NULL);
-    LinearHandProbe(&lineitem, ht, ht_num);
-    // TupleAtATimeProbe(&store_sales, ht, 3);
-    // SIMDProbe(&store_sales, ht, 3);
-    gettimeofday(&t2, NULL);
-    deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
-    printf("****** probing costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
-  }
-#endif
-#endif
-  return 0;
 }
+
+#endif
