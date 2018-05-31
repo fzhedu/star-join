@@ -8,7 +8,7 @@
 int main(int argc, char** argv) {
   // TpcdsTest(argc, argv);
   // TpchTest(argc, argv);
-  SsbTestSf100(argc, argv);
+  SsbTest(argc, argv);
 
   return 0;
 }

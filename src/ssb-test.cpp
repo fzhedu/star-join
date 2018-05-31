@@ -4,7 +4,6 @@
 
 #include "star-simd.cpp"
 
-
 int SsbTest(int argc, char** argv) {
   struct timeval t1, t2;
   if (argc > 1) {
@@ -131,7 +130,9 @@ lo_orderdate
   deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
   printf("++++ build hashtable costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
 
+  TestSet(&lineorder, "SIMD512Hor", times, Linear512ProbeHor, thread_num);
   TestSet(&lineorder, "SIMD512", times, Linear512Probe, thread_num);
+  TestSet(&lineorder, "SIMD256Hor", times, LinearSIMDProbeHor, thread_num);
   TestSet(&lineorder, "SIMD256", times, LinearSIMDProbe, thread_num);
   TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
   TestSet(&lineorder, "handprobe", times, LinearHandProbe, thread_num);
