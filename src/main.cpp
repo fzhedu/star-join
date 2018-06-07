@@ -5,10 +5,14 @@
 #include "tpcds-test.cpp"
 #include "tpch-test.cpp"
 #include "ssb-test-sf100.cpp"
+#include "ssb-test-sf50.cpp"
+
 int main(int argc, char** argv) {
   // TpcdsTest(argc, argv);
   // TpchTest(argc, argv);
-  SsbTest(argc, argv);
+  //SsbTest(argc, argv);
+  SsbTestSf100(argc, argv);
+   //SsbTestSf50(argc, argv);
 
   return 0;
 }

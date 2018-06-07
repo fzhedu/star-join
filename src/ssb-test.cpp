@@ -16,8 +16,8 @@ int SsbTest(int argc, char** argv) {
   gettimeofday(&t1, NULL);
   table_factor = (rand() << 1) | 1;
   cout << "table_factor = " << table_factor << endl;
-  // table_factor = (rand() << 1) | 1;
-  // cout << "table_factor = " << table_factor << endl;
+  table_factor = (rand() << 1) | 1;
+  cout << "table_factor = " << table_factor << endl;
 
   Table dim_date;
   dim_date.name = "dim_date";
@@ -31,7 +31,7 @@ int SsbTest(int argc, char** argv) {
   dim_date.tuple_size = SumOfVector(dim_date.size);
   tb[0] = &dim_date;
   read_data_in_memory(&dim_date);
-  test(&dim_date, dim_date.start, 0);
+  //  test(&dim_date, dim_date.start, 0);
 
   Table customer;
   customer.name = "customer";
@@ -45,7 +45,7 @@ int SsbTest(int argc, char** argv) {
   customer.tuple_size = SumOfVector(customer.size);
   tb[1] = &customer;
   read_data_in_memory(&customer);
-  test(&customer, customer.start, 0);
+  // test(&customer, customer.start, 0);
 
   Table part;
   part.name = "part";
@@ -59,7 +59,7 @@ int SsbTest(int argc, char** argv) {
   part.tuple_size = SumOfVector(part.size);
   tb[2] = &part;
   read_data_in_memory(&part);
-  test(&part, part.start, 0);
+  //  test(&part, part.start, 0);
 
   Table supplier;
   supplier.name = "supplier";
@@ -73,7 +73,7 @@ int SsbTest(int argc, char** argv) {
   supplier.tuple_size = SumOfVector(supplier.size);
   tb[3] = &supplier;
   read_data_in_memory(&supplier);
-  test(&supplier, supplier.start, 0);
+  // test(&supplier, supplier.start, 0);
 
   /* raw data schema
 lo_orderkey,0
@@ -88,10 +88,10 @@ lo_orderdate
   lineorder.tuple_num = 59986214;
   lineorder.path = "/home/claims/data/ssb/sf10/T12G0P0";
   lineorder.raw_tuple_size = 24;
-  int array9[10] = {12, 16, 8, 20};
-  SetVectorValue(array9, 4, lineorder.offset);
-  int array99[10] = {4, 4, 4, 4};
-  SetVectorValue(array99, 4, lineorder.size);
+  int array9[10] = {12, 16, 8, 20, 0};
+  SetVectorValue(array9, 5, lineorder.offset);
+  int array99[10] = {4, 4,4, 4, 4};
+  SetVectorValue(array99, 5, lineorder.size);
   lineorder.tuple_size = SumOfVector(lineorder.size);
   tb[9] = &lineorder;
   read_data_in_memory(&lineorder);
@@ -107,22 +107,22 @@ lo_orderdate
   // lineorder.tuple_num = 10000000;
 
   HashTable ht_dim_date;
-  build_linear_ht(ht_dim_date, dim_date, 0, 12);
+  build_linear_ht(ht_dim_date, dim_date, 0, 12, selectity);
   travel_linear_ht(ht_dim_date);
   ht[3] = &ht_dim_date;
 
   HashTable ht_customer;
-  build_linear_ht(ht_customer, customer, 0, 8);
+  build_linear_ht(ht_customer, customer, 0, 8, selectity);
   travel_linear_ht(ht_customer);
-  ht[2] = &ht_customer;
+  ht[0] = &ht_customer;
 
   HashTable ht_part;
-  build_linear_ht(ht_part, part, 0, 0);
+  build_linear_ht(ht_part, part, 0, 0, selectity);
   travel_linear_ht(ht_part);
-  ht[0] = &ht_part;
+  ht[2] = &ht_part;
 
   HashTable ht_supplier;
-  build_linear_ht(ht_supplier, supplier, 0, 4);
+  build_linear_ht(ht_supplier, supplier, 0, 4, selectity);
   travel_linear_ht(ht_supplier);
   ht[1] = &ht_supplier;
 
@@ -130,13 +130,12 @@ lo_orderdate
   deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
   printf("++++ build hashtable costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
 
+  TestSet(&lineorder, "handprobe", times, LinearHandProbe, thread_num);
+  TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
   TestSet(&lineorder, "SIMD512Hor", times, Linear512ProbeHor, thread_num);
   TestSet(&lineorder, "SIMD512", times, Linear512Probe, thread_num);
   TestSet(&lineorder, "SIMD256Hor", times, LinearSIMDProbeHor, thread_num);
   TestSet(&lineorder, "SIMD256", times, LinearSIMDProbe, thread_num);
-  TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
-  TestSet(&lineorder, "handprobe", times, LinearHandProbe, thread_num);
-
   return 0;
 }
 #endif

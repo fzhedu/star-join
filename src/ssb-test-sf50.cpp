@@ -1,10 +1,10 @@
-#ifndef __SSBTESTSF100__
-#define __SSBTESTSF100__
+#ifndef __SSBTESTSF50__
+#define __SSBTESTSF50__
 #include <string>
 
 #include "star-simd.cpp"
 
-int SsbTestSf100(int argc, char** argv) {
+int SsbTestSf50(int argc, char** argv) {
   struct timeval t1, t2;
   if (argc > 1) {
     times = atoi(argv[1]);
@@ -22,7 +22,7 @@ int SsbTestSf100(int argc, char** argv) {
   Table dim_date;
   dim_date.name = "dim_date";
   dim_date.tuple_num = 2556;
-  dim_date.path = "/home/claims/data/ssb/sf100/T0G0P0";
+  dim_date.path = "/home/claims/data/ssb/sf50/T0G0P0";
   dim_date.raw_tuple_size = 116;
   int array3[10] = {0, 4};
   SetVectorValue(array3, 2, dim_date.offset);
@@ -35,8 +35,8 @@ int SsbTestSf100(int argc, char** argv) {
 
   Table customer;
   customer.name = "customer";
-  customer.tuple_num = 3000000;
-  customer.path = "/home/claims/data/ssb/sf100/T2G0P0";
+  customer.tuple_num = 1500000;
+  customer.path = "/home/claims/data/ssb/sf50/T2G0P0";
   customer.raw_tuple_size = 132;
   int array4[10] = {0, 4};
   SetVectorValue(array4, 2, customer.offset);
@@ -49,8 +49,8 @@ int SsbTestSf100(int argc, char** argv) {
 
   Table part;
   part.name = "part";
-  part.tuple_num = 1400000;
-  part.path = "/home/claims/data/ssb/sf100/T4G0P0";
+  part.tuple_num = 1200000;
+  part.path = "/home/claims/data/ssb/sf50/T4G0P0";
   part.raw_tuple_size = 112;
   int array5[10] = {0, 96};
   SetVectorValue(array5, 2, part.offset);
@@ -63,8 +63,8 @@ int SsbTestSf100(int argc, char** argv) {
 
   Table supplier;
   supplier.name = "supplier";
-  supplier.tuple_num = 200000;
-  supplier.path = "/home/claims/data/ssb/sf100/T6G0P0";
+  supplier.tuple_num = 100000;
+  supplier.path = "/home/claims/data/ssb/sf50/T6G0P0";
   supplier.raw_tuple_size = 120;
   int array2[10] = {0, 4};
   SetVectorValue(array2, 2, supplier.offset);
@@ -85,10 +85,10 @@ lo_orderdate
    */
   Table lineorder;
   lineorder.name = "lineorder";
-  lineorder.tuple_num = 600038145;
-  lineorder.path = "/home/claims/data/ssb/sf100/T8G0P0";
+  lineorder.tuple_num = 300005884;
+  lineorder.path = "/home/claims/data/ssb/sf50/T8G0P0";
   lineorder.raw_tuple_size = 24;
-  int array9[10] = {12, 16, 8,20,0};
+  int array9[10] = {12, 16, 8,20, 0};
   SetVectorValue(array9, 5, lineorder.offset);
   int array99[10] = {4, 4, 4,4,4};
   SetVectorValue(array99, 5, lineorder.size);
@@ -130,11 +130,11 @@ lo_orderdate
   deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
   printf("++++ build hashtable costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
 
- TestSet(&lineorder, "handprobe", times, LinearHandProbe, thread_num);
- TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
- TestSet(&lineorder, "SIMD512Hor", times, Linear512ProbeHor, thread_num);
+  TestSet(&lineorder, "handprobe", times, LinearHandProbe, thread_num);
+  TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
+  TestSet(&lineorder, "SIMD512Hor", times, Linear512ProbeHor, thread_num);
   TestSet(&lineorder, "SIMD512", times, Linear512Probe, thread_num);
- TestSet(&lineorder, "SIMD256Hor", times, LinearSIMDProbeHor, thread_num);
+  TestSet(&lineorder, "SIMD256Hor", times, LinearSIMDProbeHor, thread_num);
   TestSet(&lineorder, "SIMD256", times, LinearSIMDProbe, thread_num);
 
   return 0;
