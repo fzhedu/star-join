@@ -21,19 +21,20 @@
 using namespace std;
 typedef unsigned long long lld;
 typedef unsigned int uint;
+typedef unsigned long long uint64_t;
+typedef unsigned int uint32_t;
+typedef unsigned short uint16_t;
 #define NULL_INT 2147483647
 #define BLOCK_SIZE 65536
 #define RESULTS 1
 #define OUTPUT 0
 #define MEMOUTPUT 0
-#define GATHERHT 0
+#define GATHERHT 1
 #define PREFETCH 0
 #define EARLYBREAK 1
 // filter out
-float selectity = 0.5;
+float selectity = 0;
 #define INVALID 2147483647
-#define _mm256_set_m128i(v0, v1) \
-  _mm256_insertf128_si256(_mm256_castsi128_si256(v1), (v0), 1)
 
 struct Table {
   string name;
@@ -66,9 +67,9 @@ typedef unsigned int uint32_t;
 pthread_mutex_t mutex;
 lld global_probe_corsur = 0, global_matched = 0;
 #define probe_step 1024 * 1024  // 1048576
-int thread_num = 32;
+int thread_num = 1;
 int ht_num = 4;
-int times = 3;
+int times = 1;
 int output_buffer_size = 32;
 // typedef unsigned long long uint64_t;
 // b
@@ -499,6 +500,28 @@ lld TupleAtATimeProbe(Table* pb, HashTable** ht, int ht_num) {
 #endif
   return num;
 }
+void output_vector(char vname[], __m512i* vector) {
+  uint32_t* array = (uint32_t*)vector;
+  printf("%s ", vname);
+  for (int i = 0; i < 16; ++i) {
+    printf("%8d", array[i]);
+  }
+  puts("");
+}
+void output_vector64(char vname[], __m512i* vector) {
+  uint64_t* array = (uint64_t*)vector;
+  printf("%s ", vname);
+  for (int i = 0; i < 8; ++i) {
+    printf("%10x", array[i]);
+  }
+  puts("");
+}
+#define _mm512_32bcvt64b(idx, val32)                          \
+  _mm512_mask_blend_epi32(                                    \
+      _mm512_int2mask(0xAAAA),                                \
+      _mm512_permutevar_epi32(_mm512_load_si512(idx), val32), \
+      _mm512_set1_epi32(0));
+
 // use short mask to avoid long mask
 lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
   uint16_t vector_scale = 16, new_add;
@@ -516,14 +539,18 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
           v_zero512 = _mm512_set1_epi32(0), v_join_id = _mm512_set1_epi32(0),
           v_one = _mm512_set1_epi32(1), v_payloads, v_payloads_off,
           v_word_size = _mm512_set1_epi64(WORDSIZE);
-  __attribute__((aligned(32)))
+  __attribute__((aligned(64)))
   uint32_t cur_offset = 0,
            tmp_cell[16], *addr_offset, temp_payloads[16][16] = {0}, *ht_pos,
            *join_id, base_off[32], tuple_cell_offset[16] = {0},
            left_size[16] = {0}, ht_cell_offset[16] = {0}, payloads_off[32],
            buckets_minus_1[16] = {0}, shift[16] = {0};
-  __attribute__((aligned(32))) void * *ht_addr, **ht_addr4, *tmp_ht_addr[16];
-  __attribute__((aligned(32))) uint64_t htp[16] = {0};
+  __attribute__((aligned(64))) void * *ht_addr, **ht_addr4, *tmp_ht_addr[16];
+  __attribute__((aligned(64))) uint64_t htp[16] = {0};
+  __attribute__((aligned(64))) int id[32] = {
+      0, 0, 1, 1, 2,  2,  3,  3,  4,  4,  5,  5,  6,  6,  7,  7,
+      8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15};
+
 #if MEMOUTPUT
   __attribute__((aligned(64))) uint32_t output_buffer[output_buffer_size];
 #endif
@@ -545,7 +572,6 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
   ht_addr4 = (void**)&v_ht_addr4;
   addr_offset = (uint32_t*)&v_addr_offset;
 
-  __m256i v_zero256 = _mm256_set1_epi32(0), v256_upper, v256_lower;
   lld equal_num = 0;
   v_base_offset = _mm512_load_si512((__m512i*)(&base_off));
   v_payloads_off = _mm512_load_epi32(payloads_off);
@@ -555,14 +581,24 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
 #endif
   int times = 0;
   for (lld cur = 0; cur < pb->tuple_num || m_have_tuple;) {
-    ///////// step 1: load new tuples' address offsets
-    // the offset should be within MAX_32INT_
-    // the tail depends on the number of joins and tuples in each bucket
+///////// step 1: load new tuples' address offsets
+// the offset should be within MAX_32INT_
+// the tail depends on the number of joins and tuples in each bucket
+#if AVX512
     v_offset = _mm512_add_epi32(_mm512_set1_epi32(cur_offset), v_base_offset);
     v_addr_offset = _mm512_mask_expand_epi32(
         v_addr_offset, _mm512_knot(m_have_tuple), v_offset);
     // count the number of empty tuples
     new_add = _mm_popcnt_u32(_mm512_knot(m_have_tuple));
+#else
+    v_addr_offset = _mm512_mask_loadunpacklo_epi32(
+        v_addr_offset, _mm512_knot(m_have_tuple), base_off);
+    v_addr_offset =
+        _mm512_mask_add_epi32(v_addr_offset, _mm512_knot(m_have_tuple),
+                              v_addr_offset, _mm512_set1_epi32(cur_offset));
+    new_add = _mm_countbits_32(_mm512_knot(m_have_tuple));
+
+#endif
     cur_offset = cur_offset + base_off[new_add];
     cur = cur + new_add;
     m_have_tuple = _mm512_cmpgt_epi32_mask(v_base_offset_upper, v_addr_offset);
@@ -595,8 +631,8 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
     v_cell_hash = _mm512_mullo_epi32(v_tuple_cell, v_factor);
     v_cell_hash = _mm512_srlv_epi32(v_cell_hash, v_shift);
     // set 0 for new cells, but add 1 for old cells
-    v_bucket_offset = _mm512_maskz_add_epi32(_mm512_knot(m_new_cells),
-                                             v_bucket_offset, v_one);
+    v_bucket_offset = _mm512_mask_add_epi32(v_zero512, _mm512_knot(m_new_cells),
+                                            v_bucket_offset, v_one);
 
     v_cell_hash = _mm512_add_epi32(v_cell_hash, v_bucket_offset);
     // avoid overflow
@@ -604,6 +640,7 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
 
     v_ht_pos = _mm512_mullo_epi32(v_cell_hash, v_left_size);
 #if GATHERHT
+#if AVX512
     v_ht_pos = _mm512_add_epi32(v_ht_pos, v_ht_cell_offset);
     __m512i v_ht_pos_644 = _mm512_cvtepu32_epi64(
         _mm256_load_si256(reinterpret_cast<__m256i*>(&ht_pos[8])));
@@ -615,6 +652,7 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
         8);  //////
     v_ht_addr = _mm512_i32gather_epi64(
         _mm256_load_si256(reinterpret_cast<__m256i*>(join_id)), htp, 8);  /////
+
     v_ht_addr4 = _mm512_add_epi64(v_ht_pos_644, v_ht_addr4);
     v_ht_addr = _mm512_add_epi64(v_ht_pos_64, v_ht_addr);
     // attention!!! should (m_have_tuple>>8)
@@ -626,6 +664,22 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
     // should lay at the upper position, and the third must be 1
     ht_cell =
         _mm512_inserti32x8(_mm512_castsi256_si512(v256_lower), v256_upper, 1);
+#else
+    __m512i v_ht_pos_64 = _mm512_32bcvt64b(id, v_ht_pos);
+    __m512i v_ht_pos_644 = _mm512_32bcvt64b(&id[16], v_ht_pos);
+    v_ht_addr = _mm512_i32logather_epi64(v_join_id, htp, 8);
+    v_join_id = _mm512_permute4f128_epi32(v_join_id, _MM_PERM_BADC);
+    v_ht_addr4 = _mm512_i32logather_epi64(v_join_id, htp, 8);
+    v_join_id = _mm512_permute4f128_epi32(v_join_id, _MM_PERM_BADC);
+    v_ht_addr4 = _mm512_add_epi64(v_ht_pos_644, v_ht_addr4);
+    v_ht_addr = _mm512_add_epi64(v_ht_pos_64, v_ht_addr);
+    __m512i upper = _mm512_mask_i64gather_epi32lo(
+        v_zero512, (m_have_tuple >> 8), v_ht_addr4, 0, 1);
+    __m512i lower =
+        _mm512_mask_i64gather_epi32lo(v_zero512, m_have_tuple, v_ht_addr, 0, 1);
+    upper = _mm512_permute4f128_epi32(upper, _MM_PERM_BADC);
+    ht_cell = _mm512_or_epi32(lower, upper);
+#endif
 #else
 // no improvement, but it is worse when judging the m_have_tuple
 // PREFETCHNTA
@@ -684,10 +738,14 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
     // the bucket is over but it isn't passed
     m_abort = _mm512_kandn(m_bucket_pass, m_new_cells);
     m_have_tuple = _mm512_kandn(_mm512_kor(m_done, m_abort), m_have_tuple);
-    v_join_id = _mm512_maskz_add_epi32(m_have_tuple, v_join_id, v_zero512);
 
+    v_join_id = _mm512_mask_blend_epi32(m_have_tuple, v_zero512, v_join_id);
     m_bucket_pass = _mm512_kandn(m_new_cells, m_bucket_pass);
+#if AVX512
     equal_num += _mm_popcnt_u32(m_done);
+#else
+    equal_num += _mm_countbits_32(m_done);
+#endif
 #if RESULTS
 #if GATHERHT
     int mid = vector_scale >> 1;
@@ -733,8 +791,10 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
 #if OUTPUT
   fclose(fp);
 #endif
+
   return equal_num;
 }
+#if HOR
 lld Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num) {
   uint16_t vector_scale = 16, new_add;
   __mmask16 m_bucket_pass, m_done, m_match, m_abort, m_have_tuple = 0,
@@ -909,759 +969,7 @@ lld Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num) {
 #endif
   return equal_num;
 }
-
-lld LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num) {
-  __m256i
-      v_join_num = _mm256_set1_epi32(ht_num),
-      v_one = _mm256_set1_epi32(1), v_tuple_cell, ht_cell, v_next_cell,
-      v_matches, v_abort, v_shift, v_ht_pos,
-      v_ht_cell_offset = _mm256_set1_epi32(0), v_ht_addr4, v_ht_addr,
-      v_left_size = _mm256_set1_epi32(8), v_done,
-      v_have_tuple = _mm256_set1_epi32(0), zero256 = _mm256_set1_epi32(0),
-      v_factor = _mm256_set1_epi32(table_factor), v_cell_hash,
-      // need to load new cells when the bucket is over
-      v_new_cells = _mm256_set1_epi32(-1), v_bucket_pass = _mm256_set1_epi32(0),
-      // travel each tuple in the bucket
-      v_bucket_offset = _mm256_set1_epi32(0), v_right_index,
-      // join id +1 if the bucket is over; join id =0 if new tuples are loaded
-      v_join_id = _mm256_set1_epi32(0),
-      v_base_offset_uppper = _mm256_set1_epi32(pb->tuple_num * pb->tuple_size),
-      v_buckets_minus_1 = _mm256_set1_epi32(0), v_base_offset, v_offset,
-      v_addr_offset;
-  const uint32_t offset_index = 0x76543210, tuple_scale = 8;
-  __attribute__((aligned(32))) int32_t base_off[10], *ht_pos, *join_id,
-      *tuple_cell, *addr_offset, *done, *have_tuple, *offset,
-      tuple_cell_offset[10] = {0}, left_size[8] = {0}, ht_cell_offset[8] = {0},
-      buckets_minus_1[8] = {0}, mask[16] = {0}, shift[8] = {0}, tmp_cell[8];
-  for (int i = 0; i <= tuple_scale; ++i) {
-    base_off[i] = i * pb->tuple_size;
-  }
-#if MEMOUTPUT
-  __attribute__((aligned(32))) uint32_t output_buffer[output_buffer_size];
 #endif
-  __attribute__((aligned(32))) uint64_t htp[8] = {0};
-  __attribute__((aligned(32))) void * *ht_addr, **ht_addr4, *tmp_ht_addr[8];
-  for (int i = tuple_scale; i < 16; ++i) {
-    mask[i] = -1;
-  }
-  // probe offset for the tuple in probing table
-  for (int i = 0; i < ht_num; ++i) {
-    tuple_cell_offset[i] = ht[i]->probe_offset;
-    left_size[i] = ht[i]->tuple_size;
-    ht_cell_offset[i] = ht[i]->key_offset;
-    htp[i] = (uint64_t)ht[i]->addr;
-    shift[i] = ht[i]->shift;
-    buckets_minus_1[i] = ht[i]->slot_num - 1;
-  }
-  left_size[ht_num] = pb->tuple_size;
-  __m128i zero128 = _mm_set1_epi32(0);
-  __m256i neg_one = _mm256_set1_epi32(-1);
-
-  have_tuple = (int32_t*)&v_have_tuple;
-  ht_pos = (int32_t*)&v_ht_pos;
-  join_id = (int32_t*)&v_join_id;
-  ht_addr = (void**)&v_ht_addr;
-  ht_addr4 = (void**)&v_ht_addr4;
-  done = (int32_t*)&v_done;
-  tuple_cell = (int32_t*)&v_tuple_cell;
-  addr_offset = (int32_t*)&v_addr_offset;
-  offset = (int32_t*)&v_offset;
-  lld equal_num = 0;
-  void* temp_result[8][8], *result_tuple;
-  uint32_t temp_payloads[8][8] = {0};
-  result_tuple = malloc(128);
-  __m256i null_int = _mm256_set1_epi32(NULL_INT);
-  v_base_offset = _mm256_load_si256((__m256i*)(&base_off));
-  uint32_t cur_offset = 0, new_add = 0, continue_mask = pb->tuple_num;
-  void* start_addr = pb->start;
-#if OUTPUT
-  FILE* fp;
-  fp = fopen("simd256.csv", "wr");
-#endif
-  /*
-   * when travel the tuples in the base table, pay attention to that the offset
-   * maybe overflow u32int
-   */
-
-  for (lld cur = 0; cur < pb->tuple_num || continue_mask;) {
-    ///////// step 1: load new tuples' address offsets
-    v_next_cell = _mm256_cmpeq_epi32(v_have_tuple, zero256);
-    uint32_t res32 = _mm256_movemask_epi8(v_next_cell);
-    // load new address offsets according to the mask from v_have_tuple
-    uint32_t mk = _pdep_u32(offset_index, res32);  // deposit contiguous masks
-    uint64_t wi = _pdep_u64(mk, 0x0f0f0f0f0f0f0f0f);  // 4b->8b
-    __m128i by = _mm_cvtsi64_si128(wi);
-    __m256i sm = _mm256_cvtepu8_epi32(by);  // cast the mask the 256i
-    // update offset
-    v_offset = _mm256_add_epi32(_mm256_set1_epi32(cur_offset), v_base_offset);
-
-    // count zero bytes in v_have_tuple
-    new_add = (_mm_popcnt_u32(res32) >> 2);
-    // update cursor in the probe_table
-    cur = cur + new_add;
-    cur_offset += base_off[new_add];
-    __m256i rs = _mm256_permutevar8x32_epi32(v_offset, sm);
-    // merge latest loaded address offsets with olds
-    v_addr_offset = _mm256_blendv_epi8(rs, v_addr_offset, v_have_tuple);
-    // valid case: addr_offset < base_offset_uppper
-    v_have_tuple = _mm256_cmpgt_epi32(v_base_offset_uppper, v_addr_offset);
-
-    // if all loaded tuples are finished, then mask = 0, so to stop this
-    // loop
-    continue_mask = _mm256_movemask_epi8(v_have_tuple);
-
-/////// step 2: load new cells from tuples
-/*
- * the cases that need to load new cells
- * (1) new tuples -> v_have_tuple
- * (2) last cells are matched for all cells in corresponding buckets ->
- * v_next_cells
- */
-#if 1
-    v_right_index =
-        _mm256_i32gather_epi32(tuple_cell_offset, v_join_id, 4);  ////
-#else
-    v_right_index = _mm256_permutevar8x32_epi32(
-        _mm256_load_si256((__m256i*)(&tuple_cell_offset)), v_join_id);
-#endif
-    // guarantee valid cells from valid tuples
-    v_new_cells = _mm256_and_si256(v_new_cells, v_have_tuple);
-    // gather cell values in new tuples
-    v_tuple_cell = _mm256_mask_i32gather_epi32(
-        v_tuple_cell, start_addr,
-        _mm256_add_epi32(v_addr_offset, v_right_index), v_new_cells, 1);
-
-////// step 3: load new values in hash tables
-// get rid of invalid cells
-//__m256i v_invalid = _mm256_cmpeq_epi32(v_tuple_cell, null_int);
-// v_have_tuple = _mm256_andnot_si256(v_invalid, v_have_tuple);
-// get the position of tuple values at the hash table
-#if 1
-    // v_left_size = _mm256_i32gather_epi32(left_size, v_join_id, 4);
-    // v_ht_cell_offset =
-    //    _mm256_i32gather_epi32(ht_cell_offset, v_join_id, 4);
-    v_shift = _mm256_i32gather_epi32(shift, v_join_id, 4);  //////
-    v_buckets_minus_1 =
-        _mm256_i32gather_epi32(buckets_minus_1, v_join_id, 4);  //
-#else
-    v_shift = _mm256_permutevar8x32_epi32(_mm256_load_si256((__m256i*)(&shift)),
-                                          v_join_id);
-    v_buckets_minus_1 = _mm256_permutevar8x32_epi32(
-        _mm256_load_si256((__m256i*)(&buckets_minus_1)), v_join_id);
-#endif
-    // hash the cell values
-    v_cell_hash = _mm256_mullo_epi32(v_tuple_cell, v_factor);
-    v_cell_hash = _mm256_srlv_epi32(v_cell_hash, v_shift);
-
-    // get the position in the hash table according to hash values
-    ////// enum each cell in the bucket of the hash table
-    v_bucket_offset = _mm256_add_epi32(v_bucket_offset, v_one);
-    // set to 0 for new cells
-    v_bucket_offset = _mm256_andnot_si256(v_new_cells, v_bucket_offset);
-
-    v_cell_hash = _mm256_add_epi32(v_cell_hash, v_bucket_offset);
-    // overflow different hash tables
-    v_cell_hash = _mm256_and_si256(v_cell_hash, v_buckets_minus_1);
-    v_ht_pos = _mm256_mullo_epi32(v_cell_hash, v_left_size);
-#if GATHERHT
-    v_ht_pos = _mm256_add_epi32(v_ht_pos, v_ht_cell_offset);
-
-    __m256i v_ht_pos_644 = _mm256_cvtepu32_epi64(
-        _mm_load_si128(reinterpret_cast<__m128i*>(&ht_pos[4])));
-    __m256i v_ht_pos_64 = _mm256_cvtepu32_epi64(
-        _mm_load_si128(reinterpret_cast<__m128i*>(ht_pos)));
-
-    v_ht_addr4 = _mm256_i32gather_epi64(
-        htp, _mm_load_si128(reinterpret_cast<__m128i*>(&join_id[4])), 8);
-    v_ht_addr = _mm256_i32gather_epi64(
-        htp, _mm_load_si128(reinterpret_cast<__m128i*>(join_id)), 8);
-
-    v_ht_addr4 = _mm256_add_epi64(v_ht_pos_644, v_ht_addr4);
-    v_ht_addr = _mm256_add_epi64(v_ht_pos_64, v_ht_addr);
-    ht_cell = _mm256_set_m128i(
-        _mm256_mask_i64gather_epi32(zero128, 0, v_ht_addr4,
-                                    _mm_load_si128((__m128i*)(&have_tuple[4])),
-                                    1),
-        _mm256_mask_i64gather_epi32(zero128, 0, v_ht_addr,
-                                    _mm_load_si128((__m128i*)(have_tuple)), 1));
-#else
-#if PREFETCH
-
-    for (int i = 0; i < tuple_scale; ++i) {
-      _mm_prefetch(ht_pos[i] + htp[join_id[i]], _MM_HINT_T0);
-    }
-#endif
-    for (int i = 0; i < tuple_scale; ++i) {
-      tmp_ht_addr[i] = ht_pos[i] + htp[join_id[i]];
-      tmp_cell[i] = *(uint32_t*)(tmp_ht_addr[i]);
-    }
-    ht_cell = _mm256_load_si256((__m256i*)tmp_cell);
-#endif
-    //// step 4: compare
-    // load raw cell data, then judge whether they are equal ? the AND get
-    // rid of invalid keys
-    v_matches = _mm256_and_si256(_mm256_cmpeq_epi32(v_tuple_cell, ht_cell),
-                                 v_have_tuple);
-
-    // the bucket is over if ht cells =-1 or early break due to match
-    // so need to process new cells
-    // then process next buckets (increase join_id and load new cells)
-    // or process next tuples
-    // or abort
-    v_new_cells = _mm256_cmpeq_epi32(ht_cell, neg_one);
-#if EARLYBREAK
-    v_new_cells = _mm256_or_si256(v_new_cells, v_matches);
-#endif
-    v_join_id =
-        _mm256_add_epi32(v_join_id, _mm256_and_si256(v_new_cells, v_one));
-    // the bucket is passed once there is a match
-    v_bucket_pass = _mm256_or_si256(v_bucket_pass, v_matches);
-    //   v_join_id = _mm256_add_epi32(v_join_id, v_one);
-    // once there is a match, this join is passed
-    // v_pass = _mm256_or_si256(v_pass, v_matches);
-    // normally done = cell is empty & join_id == join_num
-    v_done = _mm256_and_si256(v_bucket_pass,
-                              _mm256_cmpeq_epi32(v_join_id, v_join_num));
-    // the bucket is over but not passed
-    v_abort = _mm256_andnot_si256(v_bucket_pass, v_new_cells);
-
-    // have_tuple = !need_tuple & have_tuple
-    v_have_tuple =
-        _mm256_andnot_si256(_mm256_or_si256(v_done, v_abort), v_have_tuple);
-    // initialize controlling parameters
-    v_join_id = _mm256_and_si256(v_join_id, v_have_tuple);
-    // initialize parameters for new buckets
-    v_bucket_pass = _mm256_andnot_si256(v_new_cells, v_bucket_pass);
-    equal_num += (_mm_popcnt_u32(_mm256_movemask_epi8(v_done)) >> 2);
-// generate point pairs, note to use ==-1 or 0, otherwise the special
-// case may lead to errors (i.e. invalid block tuples)
-#if RESULTS
-    int32_t* res = (int32_t*)&v_matches;
-#if GATHERHT
-    int mid = (tuple_scale >> 1);
-    for (int i = 0; i < mid; ++i) {
-      if (res[i] == -1) {
-        //  temp_result[i][join_id[i]] = ht_addr[i];
-        temp_payloads[i][join_id[i]] = *(uint32_t*)(WORDSIZE + ht_addr[i]);
-      }
-    }
-    for (int i = mid; i < tuple_scale; ++i) {
-      if (res[i] == -1) {
-        //  temp_result[i][join_id[i]] = ht_addr4[i - mid];
-        temp_payloads[i][join_id[i]] =
-            *(uint32_t*)(WORDSIZE + ht_addr4[i - mid]);
-      }
-    }
-#else
-    for (int i = 0; (i < tuple_scale); ++i) {
-      //      if (m_match & 1) {
-      temp_payloads[i][join_id[i]] = *(uint32_t*)(WORDSIZE + tmp_ht_addr[i]);
-      //    }
-    }
-#endif
-    for (int i = 0; i < tuple_scale; ++i) {
-      if (done[i]) {
-        temp_payloads[i][ht_num] =
-            *(uint32_t*)(start_addr + addr_offset[i] + WORDSIZE * ht_num);
-#if MEMOUTPUT
-        _mm256_store_si256((__m256i*)output_buffer,
-                           _mm256_load_si256((__m256i*)&temp_payloads[i][0]));
-#endif
-#if OUTPUT
-        for (int j = 0; j < ht_num; ++j) {
-          fprintf(fp, "%d,", temp_payloads[i][j]);
-        }
-        fprintf(fp, "%d\n", temp_payloads[i][ht_num]);
-#endif
-      }
-    }
-#endif
-  }
-// cout << "SIMDProbe qualified tuples = " << equal_num << endl;
-#if OUTPUT
-  fclose(fp);
-#endif
-  return equal_num;
-}
-
-lld LinearSIMDProbeHor(Table* pb, HashTable** ht, int ht_num) {
-  __m256i v_pass,
-      v_join_num = _mm256_set1_epi32(ht_num), v_one = _mm256_set1_epi32(1),
-      v_tuple_cell, ht_cell, v_next_cell, v_matches, v_abort, v_shift, v_ht_pos,
-      v_ht_cell_offset = _mm256_set1_epi32(0), v_ht_addr4, v_ht_addr,
-      v_left_size = _mm256_set1_epi32(8), v_done,
-      v_have_tuple = _mm256_set1_epi32(0), zero256 = _mm256_set1_epi32(0),
-      v_factor = _mm256_set1_epi32(table_factor), v_cell_hash,
-      // need to load new cells when the bucket is over
-      v_new_cells = _mm256_set1_epi32(-1), v_bucket_pass = _mm256_set1_epi32(0),
-      // travel each tuple in the bucket
-      v_bucket_offset = _mm256_set1_epi32(0), v_right_index,
-      // join id +1 if the bucket is over; join id =0 if new tuples are loaded
-      v_join_id = _mm256_set1_epi32(0),
-      v_base_offset_uppper = _mm256_set1_epi32(pb->tuple_num * pb->tuple_size),
-      v_buckets_minus_1 = _mm256_set1_epi32(0), v_base_offset, v_offset,
-      v_addr_offset, v_10mask = _mm256_set_epi32(0, -1, 0, -1, 0, -1, 0, -1);
-  const uint32_t offset_index = 0x76543210, tuple_scale = 8;
-  __attribute__((aligned(32))) int32_t base_off[10], *ht_pos, *join_id,
-      *tuple_cell, *addr_offset, *done, *have_tuple, *offset,
-      tuple_cell_offset[10] = {0}, left_size[8] = {0}, ht_cell_offset[8] = {0},
-      buckets_minus_1[8] = {0}, mask[16] = {0}, shift[8] = {0}, tmp_cell[8];
-  for (int i = 0; i <= tuple_scale; ++i) {
-    base_off[i] = i * pb->tuple_size;
-  }
-#if MEMOUTPUT
-  __attribute__((aligned(32))) uint32_t output_buffer[output_buffer_size];
-#endif
-  __attribute__((aligned(32))) uint64_t htp[8] = {0}, bucket_upper[8] = {0};
-  __attribute__((aligned(32))) void * *ht_addr, **ht_addr4, *tmp_ht_addr[8];
-  for (int i = tuple_scale; i < 16; ++i) {
-    mask[i] = -1;
-  }
-  // probe offset for the tuple in probing table
-  for (int i = 0; i < ht_num; ++i) {
-    tuple_cell_offset[i] = ht[i]->probe_offset;
-    left_size[i] = ht[i]->tuple_size;
-    ht_cell_offset[i] = ht[i]->key_offset;
-    htp[i] = (uint64_t)ht[i]->addr;
-    shift[i] = ht[i]->shift;
-    buckets_minus_1[i] = ht[i]->slot_num - 1;
-    bucket_upper[i] = buckets_minus_1[i] * left_size[i];
-  }
-  left_size[ht_num] = pb->tuple_size;
-  __m128i zero128 = _mm_set1_epi32(0);
-  __m256i neg_one = _mm256_set1_epi32(-1);
-
-  have_tuple = (int32_t*)&v_have_tuple;
-  ht_pos = (int32_t*)&v_ht_pos;
-  join_id = (int32_t*)&v_join_id;
-  ht_addr = (void**)&v_ht_addr;
-  ht_addr4 = (void**)&v_ht_addr4;
-  done = (int32_t*)&v_done;
-  tuple_cell = (int32_t*)&v_tuple_cell;
-  addr_offset = (int32_t*)&v_addr_offset;
-  offset = (int32_t*)&v_offset;
-  lld equal_num = 0;
-  void* temp_result[8][8], *result_tuple;
-  uint32_t temp_payloads[8][8] = {0};
-  result_tuple = malloc(128);
-  __m256i null_int = _mm256_set1_epi32(NULL_INT);
-  v_base_offset = _mm256_load_si256((__m256i*)(&base_off));
-  uint32_t cur_offset = 0, new_add = 0, continue_mask = pb->tuple_num;
-  void* start_addr = pb->start;
-#if OUTPUT
-  FILE* fp;
-  fp = fopen("simd256.csv", "wr");
-#endif
-  /*
-   * when travel the tuples in the base table, pay attention to that the offset
-   * maybe overflow u32int
-   */
-
-  for (lld cur = 0; cur < pb->tuple_num || continue_mask;) {
-    ///////// step 1: load new tuples' address offsets
-    v_next_cell = _mm256_cmpeq_epi32(v_have_tuple, zero256);
-    uint32_t res32 = _mm256_movemask_epi8(v_next_cell);
-    // load new address offsets according to the mask from v_have_tuple
-    uint32_t mk = _pdep_u32(offset_index, res32);  // deposit contiguous masks
-    uint64_t wi = _pdep_u64(mk, 0x0f0f0f0f0f0f0f0f);  // 4b->8b
-    __m128i by = _mm_cvtsi64_si128(wi);
-    __m256i sm = _mm256_cvtepu8_epi32(by);  // cast the mask the 256i
-    // update offset
-    v_offset = _mm256_add_epi32(_mm256_set1_epi32(cur_offset), v_base_offset);
-
-    // count zero bytes in v_have_tuple
-    new_add = (_mm_popcnt_u32(res32) >> 2);
-    // update cursor in the probe_table
-    cur = cur + new_add;
-    cur_offset += base_off[new_add];
-    __m256i rs = _mm256_permutevar8x32_epi32(v_offset, sm);
-    // merge latest loaded address offsets with olds
-    v_addr_offset = _mm256_blendv_epi8(rs, v_addr_offset, v_have_tuple);
-    // valid case: addr_offset < base_offset_uppper
-    v_have_tuple = _mm256_cmpgt_epi32(v_base_offset_uppper, v_addr_offset);
-
-    // if all loaded tuples are finished, then mask = 0, so to stop this
-    // loop
-    continue_mask = _mm256_movemask_epi8(v_have_tuple);
-
-/////// step 2: load new cells from tuples
-/*
- * the cases that need to load new cells
- * (1) new tuples -> v_have_tuple
- * (2) last cells are matched for all cells in corresponding buckets ->
- * v_next_cells
- */
-#if 1
-    v_right_index =
-        _mm256_i32gather_epi32(tuple_cell_offset, v_join_id, 4);  ////
-#else
-    v_right_index = _mm256_permutevar8x32_epi32(
-        _mm256_load_si256((__m256i*)(&tuple_cell_offset)), v_join_id);
-#endif
-    // guarantee valid cells from valid tuples
-    v_new_cells = _mm256_and_si256(v_new_cells, v_have_tuple);
-    // gather cell values in new tuples
-    v_tuple_cell = _mm256_mask_i32gather_epi32(
-        v_tuple_cell, start_addr,
-        _mm256_add_epi32(v_addr_offset, v_right_index), v_new_cells, 1);
-
-////// step 3: load new values in hash tables
-// get rid of invalid cells
-//__m256i v_invalid = _mm256_cmpeq_epi32(v_tuple_cell, null_int);
-// v_have_tuple = _mm256_andnot_si256(v_invalid, v_have_tuple);
-// get the position of tuple values at the hash table
-#if 1
-    // v_left_size = _mm256_i32gather_epi32(left_size, v_join_id, 4);
-    // v_ht_cell_offset =
-    //    _mm256_i32gather_epi32(ht_cell_offset, v_join_id, 4);
-    v_shift = _mm256_i32gather_epi32(shift, v_join_id, 4);  //////
-    v_buckets_minus_1 =
-        _mm256_i32gather_epi32(buckets_minus_1, v_join_id, 4);  //
-#else
-    v_shift = _mm256_permutevar8x32_epi32(_mm256_load_si256((__m256i*)(&shift)),
-                                          v_join_id);
-    v_buckets_minus_1 = _mm256_permutevar8x32_epi32(
-        _mm256_load_si256((__m256i*)(&buckets_minus_1)), v_join_id);
-#endif
-    // hash the cell values
-    v_cell_hash = _mm256_mullo_epi32(v_tuple_cell, v_factor);
-    v_cell_hash = _mm256_srlv_epi32(v_cell_hash, v_shift);
-
-    // get the position in the hash table according to hash values
-    ////// enum each cell in the bucket of the hash table
-    v_bucket_offset = _mm256_add_epi32(v_bucket_offset, v_one);
-    // set to 0 for new cells
-    v_bucket_offset = _mm256_andnot_si256(v_new_cells, v_bucket_offset);
-
-    v_cell_hash = _mm256_add_epi32(v_cell_hash, v_bucket_offset);
-    // overflow different hash tables
-    v_cell_hash = _mm256_and_si256(v_cell_hash, v_buckets_minus_1);
-    v_ht_pos = _mm256_mullo_epi32(v_cell_hash, v_left_size);
-    v_matches = zero256;
-    for (int j = 0; j < tuple_scale; ++j) {
-      uint32_t p = ht_pos[j];
-      __m256i key_x8 = _mm256_set1_epi32(tuple_cell[j]);
-#if PREFETCH
-      if (j < 15) {
-        _mm_prefetch(ht_pos[j + 1] + htp[join_id[j + 1]], _MM_HINT_T0);
-      }
-#endif
-      short flag = 0;
-      for (;;) {
-        __m256i tab =
-            _mm256_loadu_si256((__m256i*)((void*)(htp[join_id[j]] + p)));
-        __m256i out = _mm256_cmpeq_epi32(tab, key_x8);
-        out = _mm256_and_si256(v_10mask, out);
-        if (!_mm256_testz_si256(out, out)) {
-          int znum = (_tzcnt_u32(_mm256_movemask_epi8(out)) >> 2);
-          // avoid overflowing
-          if (znum * left_size[join_id[j]] + p <= bucket_upper[join_id[j]]) {
-            temp_payloads[j][join_id[j]] =
-                *(uint32_t*)(htp[join_id[j]] + p +
-                             znum * left_size[join_id[j]] + WORDSIZE);
-            flag = 1;
-#if EARLYBREAK
-            break;
-#endif
-          }
-        }
-        out = _mm256_cmpeq_epi32(tab, neg_one);
-        out = _mm256_and_si256(v_10mask, out);
-
-        if (!_mm256_testz_si256(out, out)) break;
-        p = (p + 32) >= (bucket_upper[join_id[j]])
-                ? p + 32 - bucket_upper[join_id[j]]
-                : p + 32;
-      }
-      v_matches = _mm256_mask_set1_epi32(v_matches, (flag << j), -1);
-    }
-    v_matches = _mm256_and_si256(v_matches, v_have_tuple);
-    v_join_id = _mm256_add_epi32(v_join_id, v_one);
-    // the bucket is passed once there is a match
-    //   v_join_id = _mm256_add_epi32(v_join_id, v_one);
-    // once there is a match, this join is passed
-    // v_pass = _mm256_or_si256(v_pass, v_matches);
-    // normally done = cell is empty & join_id == join_num
-    v_done =
-        _mm256_and_si256(v_matches, _mm256_cmpeq_epi32(v_join_id, v_join_num));
-    // the bucket is over but not passed
-    v_abort = _mm256_andnot_si256(v_matches, neg_one);
-
-    // have_tuple = !need_tuple & have_tuple
-    v_have_tuple =
-        _mm256_andnot_si256(_mm256_or_si256(v_done, v_abort), v_have_tuple);
-    // initialize controlling parameters
-    v_join_id = _mm256_and_si256(v_join_id, v_have_tuple);
-
-    equal_num += (_mm_popcnt_u32(_mm256_movemask_epi8(v_done)) >> 2);
-// generate point pairs, note to use ==-1 or 0, otherwise the special
-// case may lead to errors (i.e. invalid block tuples)
-#if RESULTS
-    int32_t* res = (int32_t*)&v_matches;
-    for (int i = 0; i < tuple_scale; ++i) {
-      if (done[i]) {
-        temp_payloads[i][ht_num] =
-            *(uint32_t*)(start_addr + addr_offset[i] + WORDSIZE * ht_num);
-#if MEMOUTPUT
-        _mm256_store_si256((__m256i*)output_buffer,
-                           _mm256_load_si256((__m256i*)&temp_payloads[i][0]));
-#endif
-#if OUTPUT
-        for (int j = 0; j < ht_num; ++j) {
-          fprintf(fp, "%d,", temp_payloads[i][j]);
-        }
-        fprintf(fp, "%d\n", temp_payloads[i][ht_num]);
-#endif
-      }
-    }
-#endif
-  }
-// cout << "SIMDProbe qualified tuples = " << equal_num << endl;
-#if OUTPUT
-  fclose(fp);
-#endif
-  return equal_num;
-}
-
-lld SIMDProbe(Table* pb, HashTable** ht, int ht_num) {
-  __m256i v_pass,
-      v_join_num = _mm256_set1_epi32(ht_num), v_one = _mm256_set1_epi32(1),
-      v_tuple_cell, ht_cell, v_next_cell, v_matches, v_abort, v_shift, v_ht_pos,
-      v_ht_cell_offset, v_ht_addr4, v_ht_addr, v_left_size, v_done,
-      v_have_tuple = _mm256_set1_epi32(0), zero256 = _mm256_set1_epi32(0),
-      v_join_id = _mm256_set1_epi32(0), v_base_offset, v_offset, v_addr_offset;
-  const uint32_t offset_index = 0x76543210, tuple_scale = 8;
-  __attribute__((aligned(32))) int32_t base_off[10], *ht_pos, *join_id,
-      *tuple_cell, *addr_offset, *done, *have_tuple, *offset,
-      tuple_cell_offset[10] = {0}, left_size[8] = {0}, ht_cell_offset[8] = {0},
-      mask[16] = {0};
-  for (int i = 0; i <= tuple_scale; ++i) {
-    base_off[i] = i * pb->tuple_size;
-  }
-  __attribute__((aligned(32))) uint64_t htp[8] = {0};
-  __attribute__((aligned(32))) void * *ht_addr, **ht_addr4;
-  for (int i = tuple_scale; i < 16; ++i) {
-    mask[i] = -1;
-  }
-  // probe offset for the tuple in probing table
-  for (int i = 0; i < ht_num; ++i) {
-    tuple_cell_offset[i] = ht[i]->probe_offset;
-    left_size[i] = ht[i]->tuple_size;
-    ht_cell_offset[i] = ht[i]->key_offset;
-    htp[i] = (uint64_t)ht[i]->addr;
-  }
-  left_size[ht_num] = pb->tuple_size;
-  __m128i zero128 = _mm_set1_epi32(0);
-  __m256i neg_one = _mm256_set1_epi32(-1);
-
-  have_tuple = (int32_t*)&v_have_tuple;
-  ht_pos = (int32_t*)&v_ht_pos;
-  join_id = (int32_t*)&v_join_id;
-  ht_addr = (void**)&v_ht_addr;
-  ht_addr4 = (void**)&v_ht_addr4;
-  done = (int32_t*)&v_done;
-  tuple_cell = (int32_t*)&v_tuple_cell;
-  addr_offset = (int32_t*)&v_addr_offset;
-  offset = (int32_t*)&v_offset;
-  lld equal_num = 0;
-  void* temp_result[8][8], *result_tuple;
-  result_tuple = malloc(128);
-  __m256i null_int = _mm256_set1_epi32(NULL_INT);
-  v_base_offset = _mm256_load_si256((__m256i*)(&base_off));
-  uint32_t cur_offset = 0, new_add = 0, continue_mask = pb->tuple_num;
-  void* start_addr = pb->start;
-  for (lld cur = 0; true;) {
-    if (cur < pb->tuple_num) {
-      ///////// step 1: load new tuples' address offsets
-      v_next_cell = _mm256_cmpeq_epi32(v_have_tuple, zero256);
-      uint32_t res32 = _mm256_movemask_epi8(v_next_cell);
-      // load new address offsets according to the mask from v_have_tuple
-      uint32_t mk = _pdep_u32(offset_index, res32);  // deposit contiguous masks
-      uint64_t wi = _pdep_u64(mk, 0x0f0f0f0f0f0f0f0f);  // 4b->8b
-      __m128i by = _mm_cvtsi64_si128(wi);
-      __m256i sm = _mm256_cvtepu8_epi32(by);  // cast the mask the 256i
-      // update offset
-      v_offset = _mm256_add_epi32(_mm256_set1_epi32(cur_offset), v_base_offset);
-
-      // count zero bytes in v_have_tuple
-      new_add = (_mm_popcnt_u32(res32) >> 2);
-      // update cursor in the probe_table
-      int temp = cur + new_add;
-      if (temp <= pb->tuple_num) {
-        cur = temp;
-        cur_offset += base_off[new_add];
-#if 0
-      if (cur_offset > OVER_FLOW) {
-        start_addr += OVER;
-        cur_offset -= OVER;
-        cout << "cur = " << cur << endl;
-        for (int i = 0; i < tuple_scale; ++i) {
-          if (addr_offset[i] > 0 && addr_offset[i] < OVER) {
-            assert(false && "invalid offset");
-          } else if (addr_offset[i] > 0 && addr_offset[i] >= OVER) {
-            addr_offset[i] -= OVER;
-          }
-          cout << i << " " << addr_offset[i] << endl;
-        }
-        v_addr_offset =
-            _mm256_sub_epi32(v_addr_offset, _mm256_set1_epi32(OVER));
-      }
-#endif
-      } else {
-        for (int i = 0; i < pb->tuple_num - cur; ++i) {
-          mask[i] = 0;
-        }
-        for (int i = pb->tuple_num - cur; i < tuple_scale; ++i) {
-          mask[i] = -1;
-        }
-        __m256i v_mask = _mm256_load_si256((__m256i*)mask);
-        v_offset = _mm256_or_si256(v_offset, v_mask);
-
-#if 0
-        cout << "tuple_num = " << pb->tuple_num << " - cur = " << cur
-             << " == " << pb->tuple_num - cur << endl;
-        for (int i = 0; i < tuple_scale; ++i) {
-          cout << "offset " << i << "  " << offset[i] << endl;
-        }
-        int* tmp = (int*)&v_have_tuple;
-        for (int i = 0; i < tuple_scale; ++i) {
-          cout << "have tuple " << i << "  " << tmp[i] << endl;
-        }
-        tmp = (int*)&sm;
-        for (int i = 0; i < tuple_scale; ++i) {
-          cout << "sm " << i << "  " << tmp[i] << endl;
-        }
-        for (int i = 0; i < tuple_scale; ++i) {
-          cout << "before addr " << i << "  " << addr_offset[i] << endl;
-        }
-#endif
-        cur = pb->tuple_num;
-      }
-      __m256i rs = _mm256_permutevar8x32_epi32(v_offset, sm);
-
-      // merge latest loaded address offsets with olds
-      v_addr_offset = _mm256_blendv_epi8(rs, v_addr_offset, v_have_tuple);
-
-      // invalid case: add_offset == -1, so all cells > -1
-      v_have_tuple = _mm256_cmpgt_epi32(v_addr_offset, neg_one);
-#if 0
-      if (cur == pb->tuple_num) {
-        int* tmp = (int*)&v_have_tuple;
-        for (int i = 0; i < tuple_scale; ++i) {
-          cout << "after have tuple " << i << "  " << tmp[i] << endl;
-        }
-        for (int i = 0; i < tuple_scale; ++i) {
-          cout << "after addr " << i << "  " << addr_offset[i] << endl;
-        }
-      }
-#endif
-    } else if (continue_mask == 0) {
-      break;
-    }
-
-    // if all loaded tuples are finished, then mask = 0, so to stop this
-    // loop
-    continue_mask = _mm256_movemask_epi8(v_have_tuple);
-    /////// step 2: load new cells from tuples
-    /*
-     * the cases that need to load new cells
-     * (1) new tuples -> v_have_tuple
-     * (2) last cells are matched for all cells in corresponding buckets ->
-     * v_next_cells
-     *  but for ARRAYHASHTUPLE is special, all cells just match once
-     */
-    __m256i right_index =
-        _mm256_i32gather_epi32(tuple_cell_offset, v_join_id, 4);
-
-    // gather cell values in new tuples
-    v_tuple_cell = _mm256_mask_i32gather_epi32(
-        v_tuple_cell, start_addr, _mm256_add_epi32(v_addr_offset, right_index),
-        v_have_tuple, 1);
-    ////// step 3: load new values in hash tables
-    // get rid of invalid cells
-    __m256i v_invalid = _mm256_cmpeq_epi32(v_tuple_cell, null_int);
-    v_have_tuple = _mm256_andnot_si256(v_invalid, v_have_tuple);
-    // get the position of tuple values at the hash table
-    v_left_size = _mm256_i32gather_epi32(left_size, v_join_id, 4);
-    v_ht_cell_offset = _mm256_i32gather_epi32(ht_cell_offset, v_join_id, 4);
-    v_ht_pos = _mm256_mullo_epi32(v_tuple_cell, v_left_size);
-    v_ht_pos = _mm256_add_epi32(v_ht_pos, v_ht_cell_offset);
-
-    __m256i v_ht_pos_644 = _mm256_cvtepu32_epi64(
-        _mm_load_si128(reinterpret_cast<__m128i*>(&ht_pos[4])));
-    __m256i v_ht_pos_64 = _mm256_cvtepu32_epi64(
-        _mm_load_si128(reinterpret_cast<__m128i*>(ht_pos)));
-
-    v_ht_addr4 = _mm256_i32gather_epi64(
-        htp, _mm_load_si128(reinterpret_cast<__m128i*>(&join_id[4])), 8);
-    v_ht_addr = _mm256_i32gather_epi64(
-        htp, _mm_load_si128(reinterpret_cast<__m128i*>(join_id)), 8);
-
-    ht_cell = _mm256_set_m128i(
-        _mm256_mask_i64gather_epi32(
-            zero128, 0, _mm256_add_epi64(v_ht_pos_644, v_ht_addr4),
-            _mm_load_si128((__m128i*)(&have_tuple[4])), 1),
-        _mm256_mask_i64gather_epi32(zero128, 0,
-                                    _mm256_add_epi64(v_ht_pos_64, v_ht_addr),
-                                    _mm_load_si128((__m128i*)(have_tuple)), 1));
-
-    //// step 4: compare
-    // load raw cell data, then judge whether they are equal ? the AND get
-    // rid of invalid keys
-    v_matches = _mm256_and_si256(_mm256_cmpeq_epi32(v_tuple_cell, ht_cell),
-                                 v_have_tuple);
-
-// generate point pairs, note to use ==-1 or 0, otherwise the special
-// case may lead to errors (i.e. invalid block tuples)
-#if RESULTS
-    int32_t* res = (int32_t*)&v_matches;
-    int mid = tuple_scale >> 1;
-    for (int i = 0; i < mid; ++i) {
-      if (res[i] == -1) {
-        temp_result[i][join_id[i]] = ht_addr[i];
-      }
-    }
-    for (int i = mid; i < tuple_scale; ++i) {
-      if (res[i] == -1) {
-        temp_result[i][join_id[i]] = ht_addr4[i - mid];
-      }
-    }
-#endif
-    v_join_id = _mm256_add_epi32(v_join_id, v_one);
-    // once there is a match, this join is passed
-    // v_pass = _mm256_or_si256(v_pass, v_matches);
-    // normally done = cell is empty & join_id == join_num
-    v_done =
-        _mm256_and_si256(v_matches, _mm256_cmpeq_epi32(v_join_id, v_join_num));
-    // abort = cell is empty & !pass
-    v_abort = _mm256_andnot_si256(v_matches, neg_one);
-
-    // have_tuple = !need_tuple & have_tuple
-    v_have_tuple =
-        _mm256_andnot_si256(_mm256_or_si256(v_done, v_abort), v_have_tuple);
-    // initialize controlling parameters
-    v_join_id = _mm256_and_si256(v_join_id, v_have_tuple);
-#if RESULTS
-    for (int i = 0; i < tuple_scale; ++i) {
-      if (done[i]) {
-        ++equal_num;
-        temp_result[i][ht_num] = start_addr + addr_offset[i];
-        int copyed_bytes = 0;
-        for (int id = 0; id <= ht_num; ++id) {
-          memcpy(result_tuple + copyed_bytes, temp_result[i][id],
-                 left_size[id]);
-          copyed_bytes += left_size[id];
-        }
-      }
-    }
-#else
-    equal_num += (_mm_popcnt_u32(_mm256_movemask_epi8(v_done)) >> 2);
-#endif
-  }
-  // cout << "SIMDProbe qualified tuples = " << equal_num << endl;
-
-  return equal_num;
-}
 void* ThreadProbe(void* args) {
   ThreadArgs* arg = (ThreadArgs*)args;
   lld upper = 0, lower = 0, matched = 0;

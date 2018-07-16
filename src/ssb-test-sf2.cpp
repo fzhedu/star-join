@@ -1,10 +1,10 @@
-#ifndef __SSBTEST__
-#define __SSBTEST__
+#ifndef __SSBTESTSF2__
+#define __SSBTESTSF2__
 #include <string>
 
 #include "star-simd.cpp"
 
-int SsbTest(int argc, char** argv) {
+int SsbTestSf2(int argc, char** argv) {
   struct timeval t1, t2;
   if (argc > 1) {
     times = atoi(argv[1]);
@@ -22,7 +22,7 @@ int SsbTest(int argc, char** argv) {
   Table dim_date;
   dim_date.name = "dim_date";
   dim_date.tuple_num = 2556;
-  dim_date.path = "/home/claims/data/ssb/sf10/T0G0P0";
+  dim_date.path = "/home/claims/data/ssb/sf2/T0G0P0";
   dim_date.raw_tuple_size = 116;
   int array3[10] = {0, 4};
   SetVectorValue(array3, 2, dim_date.offset);
@@ -35,8 +35,8 @@ int SsbTest(int argc, char** argv) {
 
   Table customer;
   customer.name = "customer";
-  customer.tuple_num = 300000;
-  customer.path = "/home/claims/data/ssb/sf10/T2G0P0";
+  customer.tuple_num = 60000;
+  customer.path = "/home/claims/data/ssb/sf2/T2G0P0";
   customer.raw_tuple_size = 132;
   int array4[10] = {0, 4};
   SetVectorValue(array4, 2, customer.offset);
@@ -49,8 +49,8 @@ int SsbTest(int argc, char** argv) {
 
   Table part;
   part.name = "part";
-  part.tuple_num = 800000;
-  part.path = "/home/claims/data/ssb/sf10/T4G0P0";
+  part.tuple_num = 400000;
+  part.path = "/home/claims/data/ssb/sf2/T4G0P0";
   part.raw_tuple_size = 112;
   int array5[10] = {0, 96};
   SetVectorValue(array5, 2, part.offset);
@@ -63,8 +63,8 @@ int SsbTest(int argc, char** argv) {
 
   Table supplier;
   supplier.name = "supplier";
-  supplier.tuple_num = 20000;
-  supplier.path = "/home/claims/data/ssb/sf10/T6G0P0";
+  supplier.tuple_num = 4000;
+  supplier.path = "/home/claims/data/ssb/sf2/T6G0P0";
   supplier.raw_tuple_size = 120;
   int array2[10] = {0, 4};
   SetVectorValue(array2, 2, supplier.offset);
@@ -85,12 +85,12 @@ lo_orderdate
    */
   Table lineorder;
   lineorder.name = "lineorder";
-  lineorder.tuple_num = 59986214;
-  lineorder.path = "/home/claims/data/ssb/sf10/T12G0P0";
+  lineorder.tuple_num = 11998051;
+  lineorder.path = "/home/claims/data/ssb/sf2/T8G0P0";
   lineorder.raw_tuple_size = 24;
   int array9[10] = {12, 16, 8, 20, 0};
   SetVectorValue(array9, 5, lineorder.offset);
-  int array99[10] = {4, 4,4, 4, 4};
+  int array99[10] = {4, 4, 4, 4, 4};
   SetVectorValue(array99, 5, lineorder.size);
   lineorder.tuple_size = SumOfVector(lineorder.size);
   tb[9] = &lineorder;
