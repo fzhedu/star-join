@@ -24,13 +24,13 @@ typedef unsigned int uint;
 #define NULL_INT 2147483647
 #define BLOCK_SIZE 65536
 #define RESULTS 1
-#define OUTPUT 0
+#define OUTPUT 1
 #define MEMOUTPUT 0
-#define GATHERHT 0
+#define GATHERHT 1
 #define PREFETCH 0
 #define EARLYBREAK 1
 // filter out
-float selectity = 0.5;
+float selectity = 0.3;
 #define INVALID 2147483647
 #define _mm256_set_m128i(v0, v1) \
   _mm256_insertf128_si256(_mm256_castsi128_si256(v1), (v0), 1)
@@ -66,9 +66,9 @@ typedef unsigned int uint32_t;
 pthread_mutex_t mutex;
 lld global_probe_corsur = 0, global_matched = 0;
 #define probe_step 1024 * 1024  // 1048576
-int thread_num = 32;
+int thread_num = 1;
 int ht_num = 4;
-int times = 3;
+int times = 1;
 int output_buffer_size = 32;
 // typedef unsigned long long uint64_t;
 // b
@@ -304,9 +304,9 @@ lld LinearHandProbe(Table* pb, HashTable** ht, int ht_num) {
 #endif
 #if OUTPUT
       for (int i = 0; i < ht_num; ++i) {
-        fprintf(fp, "%d,", cell_equal[i][1]);
+        fprintf(fp, "%d,", cell_equal[i]);
       }
-      fprintf(fp, "%d\n", cell_equal[ht_num][1]);
+      fprintf(fp, "%d\n", cell_equal[ht_num]);
 #endif
     }
 #endif
@@ -666,6 +666,33 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
     _mm512_mask_i32scatter_epi32(temp_payloads, m_match, v_offset, v_payloads,
                                  4);
 #endif
+#if RESULTS
+#if GATHERHT
+    __mmask16 m_match_copy = m_match;
+    int mid = vector_scale >> 1;
+    for (int i = 0; m_match_copy && i < mid;
+         ++i, m_match_copy = (m_match_copy >> 1)) {
+      if (m_match_copy & 1) {
+        temp_payloads[i][join_id[i]] = *(uint32_t*)(WORDSIZE + ht_addr[i]);
+      }
+    }
+    for (int i = mid; m_match_copy && i < vector_scale;
+         ++i, m_match_copy = (m_match_copy >> 1)) {
+      if (m_match_copy & 1) {
+        temp_payloads[i][join_id[i]] =
+            *(uint32_t*)(WORDSIZE + ht_addr4[i - mid]);
+      }
+    }
+
+#else
+    for (int i = 0; m_match_copy && (i < vector_scale);
+         ++i, m_match_copy = m_match_copy >> 1) {
+      //      if (m_match_copy & 1) {
+      temp_payloads[i][join_id[i]] = *(uint32_t*)(WORDSIZE + tmp_ht_addr[i]);
+      //      }
+    }
+#endif
+#endif
     // the bucket is over if ht cells =-1 or early break due to match
     // so need to process new cells
     // then process next buckets (increase join_id and load new cells)
@@ -689,29 +716,6 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
     m_bucket_pass = _mm512_kandn(m_new_cells, m_bucket_pass);
     equal_num += _mm_popcnt_u32(m_done);
 #if RESULTS
-#if GATHERHT
-    int mid = vector_scale >> 1;
-    for (int i = 0; m_match && i < mid; ++i, m_match = (m_match >> 1)) {
-      if (m_match & 1) {
-        temp_payloads[i][join_id[i]] = *(uint32_t*)(WORDSIZE + ht_addr[i]);
-      }
-    }
-    for (int i = mid; m_match && i < vector_scale;
-         ++i, m_match = (m_match >> 1)) {
-      if (m_match & 1) {
-        temp_payloads[i][join_id[i]] =
-            *(uint32_t*)(WORDSIZE + ht_addr4[i - mid]);
-      }
-    }
-
-#else
-    for (int i = 0; m_match && (i < vector_scale);
-         ++i, m_match = m_match >> 1) {
-      //      if (m_match & 1) {
-      temp_payloads[i][join_id[i]] = *(uint32_t*)(WORDSIZE + tmp_ht_addr[i]);
-      //      }
-    }
-#endif
     for (int i = 0; m_done && i < vector_scale; ++i, m_done = (m_done >> 1)) {
       if (m_done & 1) {
         temp_payloads[i][ht_num] =

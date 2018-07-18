@@ -1,7 +1,9 @@
 #ifndef __SSBTESTSF1__
 #define __SSBTESTSF1__
 #include <string>
-#if AVX512
+#define FAVX512 0
+
+#if FAVX512
 #include "star-simd.cpp"
 #else
 #include "star-simd-phi.cpp"
@@ -24,8 +26,11 @@ int SsbTestSf1(int argc, char** argv) {
   Table dim_date;
   dim_date.name = "dim_date";
   dim_date.tuple_num = 2556;
-  // dim_date.path = "/home/claims/data/ssb/sf1/T0G0P0";
+#if FAVX512
+  dim_date.path = "/home/claims/data/ssb/sf1/T0G0P0";
+#else
   dim_date.path = "/tmp/share_nfs/sf1/T0G0P0";
+#endif
   dim_date.raw_tuple_size = 116;
   int array3[10] = {0, 4};
   SetVectorValue(array3, 2, dim_date.offset);
@@ -39,9 +44,12 @@ int SsbTestSf1(int argc, char** argv) {
   Table customer;
   customer.name = "customer";
   customer.tuple_num = 30000;
-  // customer.path = "/home/claims/data/ssb/sf1/T2G0P0";
-  customer.path = "/tmp/share_nfs/sf1/T2G0P0";
+#if FAVX512
 
+  customer.path = "/home/claims/data/ssb/sf1/T2G0P0";
+#else
+  customer.path = "/tmp/share_nfs/sf1/T2G0P0";
+#endif
   customer.raw_tuple_size = 132;
   int array4[10] = {0, 4};
   SetVectorValue(array4, 2, customer.offset);
@@ -55,9 +63,11 @@ int SsbTestSf1(int argc, char** argv) {
   Table part;
   part.name = "part";
   part.tuple_num = 200000;
-  //  part.path = "/home/claims/data/ssb/sf1/T4G0P0";
+#if FAVX512
+  part.path = "/home/claims/data/ssb/sf1/T4G0P0";
+#else
   part.path = "/tmp/share_nfs/sf1/T4G0P0";
-
+#endif
   part.raw_tuple_size = 112;
   int array5[10] = {0, 96};
   SetVectorValue(array5, 2, part.offset);
@@ -71,9 +81,11 @@ int SsbTestSf1(int argc, char** argv) {
   Table supplier;
   supplier.name = "supplier";
   supplier.tuple_num = 2000;
-  //  supplier.path = "/home/claims/data/ssb/sf1/T6G0P0";
+#if FAVX512
+  supplier.path = "/home/claims/data/ssb/sf1/T6G0P0";
+#else
   supplier.path = "/tmp/share_nfs/sf1/T6G0P0";
-
+#endif
   supplier.raw_tuple_size = 120;
   int array2[10] = {0, 4};
   SetVectorValue(array2, 2, supplier.offset);
@@ -95,9 +107,11 @@ lo_orderdate
   Table lineorder;
   lineorder.name = "lineorder";
   lineorder.tuple_num = 6001171;
-  //  lineorder.path = "/home/claims/data/ssb/sf1/T8G0P0";
+#if FAVX512
+  lineorder.path = "/home/claims/data/ssb/sf1/T8G0P0";
+#else
   lineorder.path = "/tmp/share_nfs/sf1/T8G0P0";
-
+#endif
   lineorder.raw_tuple_size = 88;
   int array9[10] = {12, 16, 8, 20, 0};
   SetVectorValue(array9, 5, lineorder.offset);
@@ -126,7 +140,7 @@ lo_orderdate
   HashTable ht_customer;
   build_linear_ht(ht_customer, customer, 0, 8, selectity);
   travel_linear_ht(ht_customer);
-  ht[1] = &ht_customer;
+  ht[2] = &ht_customer;
 
   HashTable ht_part;
   build_linear_ht(ht_part, part, 0, 0, selectity);
@@ -136,7 +150,7 @@ lo_orderdate
   HashTable ht_supplier;
   build_linear_ht(ht_supplier, supplier, 0, 4, selectity);
   travel_linear_ht(ht_supplier);
-  ht[2] = &ht_supplier;
+  ht[1] = &ht_supplier;
 
   gettimeofday(&t2, NULL);
   deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
@@ -144,7 +158,7 @@ lo_orderdate
 
   TestSet(&lineorder, "handprobe", times, LinearHandProbe, thread_num);
   // TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
-  // TestSet(&lineorder, "SIMD512Hor", times, Linear512ProbeHor, thread_num);
+  TestSet(&lineorder, "SIMD512Hor", times, Linear512ProbeHor, thread_num);
   TestSet(&lineorder, "SIMD512", times, Linear512Probe, thread_num);
   // TestSet(&lineorder, "SIMD256Hor", times, LinearSIMDProbeHor, thread_num);
   // TestSet(&lineorder, "SIMD256", times, LinearSIMDProbe, thread_num);
