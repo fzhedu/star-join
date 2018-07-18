@@ -539,9 +539,9 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
   if (pb->tuple_num <= 0) {
     return 0;
   }
-  uint16_t vector_scale = 16, new_add;
-  __mmask16 m_bucket_pass, m_done, m_match, m_abort, m_have_tuple = 0,
-                                                     m_new_cells = -1;
+  uint16_t vector_scale = 16, new_add = 0;
+  __mmask16 m_bucket_pass = 0, m_done = 0, m_match = 0, m_abort = 0,
+            m_have_tuple = 0, m_new_cells = -1;
   __m512i v_offset = _mm512_set1_epi32(0), v_addr_offset = _mm512_set1_epi32(0),
           v_join_num = _mm512_set1_epi32(ht_num),
           v_base_offset_upper =
@@ -1046,7 +1046,7 @@ void* ThreadProbe(void* args) {
 void TestSet(Table* tb, string fun_name, int times, ProbeFunc func,
              int thread_num) {
   struct timeval t1, t2;
-  pthread_t id[40];
+  pthread_t id[300];
   int deltaT = 0;
   ThreadArgs args;
   args.tb = tb;
