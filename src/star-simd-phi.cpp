@@ -28,7 +28,7 @@ typedef unsigned short uint16_t;
 #define NULL_INT 2147483647
 #define BLOCK_SIZE 65536
 #define RESULTS 1
-#define OUTPUT 0
+#define OUTPUT 1
 #define MEMOUTPUT 0
 #define GATHERHT 1
 #define PREFETCH 0
@@ -546,17 +546,19 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
           v_join_num = _mm512_set1_epi32(ht_num),
           v_base_offset_upper =
               _mm512_set1_epi32(pb->tuple_num * pb->tuple_size),
-          v_ht_addr4, v_ht_addr, v_tuple_cell = _mm512_set1_epi32(0),
+          v_ht_addr_hi, v_ht_addr_lo, v_tuple_cell = _mm512_set1_epi32(0),
           v_right_index, v_base_offset, v_left_size = _mm512_set1_epi32(8),
-          v_bucket_offset, ht_cell, v_factor = _mm512_set1_epi32(table_factor),
-          v_ht_cell_offset, v_shift, v_buckets_minus_1, v_cell_hash, v_ht_pos,
-          v_neg_one512 = _mm512_set1_epi32(-1),
-          v_zero512 = _mm512_set1_epi32(0), v_join_id = _mm512_set1_epi32(0),
+          v_bucket_offset, v_ht_cell,
+          v_factor = _mm512_set1_epi32(table_factor), v_ht_cell_offset, v_shift,
+          v_buckets_minus_1, v_cell_hash, v_ht_pos,
+          v_neg_one512 = _mm512_set1_epi32(-1), v_ht_cell_upper,
+          v_ht_cell_lower, v_zero512 = _mm512_set1_epi32(0), v_ht_pos_lo,
+          v_ht_pos_hi, v_join_id = _mm512_set1_epi32(0),
           v_one = _mm512_set1_epi32(1), v_payloads, v_payloads_off,
           v_word_size = _mm512_set1_epi64(WORDSIZE);
   __attribute__((aligned(64)))
   uint32_t cur_offset = 0,
-           tmp_cell[16], *addr_offset, temp_payloads[16][16] = {0}, *ht_pos,
+           tmp_cell[16], *addr_offset, temp_payloads[16][5] = {0}, *ht_pos,
            *join_id, base_off[32], tuple_cell_offset[16] = {0},
            left_size[16] = {0}, ht_cell_offset[16] = {0}, payloads_off[32],
            buckets_minus_1[16] = {0}, shift[16] = {0};
@@ -571,7 +573,7 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
 #endif
   for (int i = 0; i <= vector_scale; ++i) {
     base_off[i] = i * pb->tuple_size;
-    payloads_off[i] = i * 16;  // it is related to temp_payloads
+    payloads_off[i] = i * 5;  // subject to the second size of temp_payloads
   }
   for (int i = 0; i < ht_num; ++i) {
     tuple_cell_offset[i] = ht[i]->probe_offset;
@@ -583,8 +585,8 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
   }
   ht_pos = (uint32_t*)&v_ht_pos;
   join_id = (uint32_t*)&v_join_id;
-  ht_addr = (void**)&v_ht_addr;
-  ht_addr4 = (void**)&v_ht_addr4;
+  ht_addr = (void**)&v_ht_addr_lo;
+  ht_addr4 = (void**)&v_ht_addr_hi;
   addr_offset = (uint32_t*)&v_addr_offset;
 
   lld equal_num = 0;
@@ -654,20 +656,20 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
 
     v_ht_pos = _mm512_mullo_epi32(v_cell_hash, v_left_size);
 #if GATHERHT
-    __m512i v_ht_pos_64 = _mm512_32bcvt64b(id, v_ht_pos);
-    __m512i v_ht_pos_644 = _mm512_32bcvt64b(&id[16], v_ht_pos);
-    v_ht_addr = _mm512_i32logather_epi64(v_join_id, htp, 8);
+    v_ht_pos_lo = _mm512_32bcvt64b(id, v_ht_pos);
+    v_ht_pos_hi = _mm512_32bcvt64b(&id[16], v_ht_pos);
+    v_ht_addr_lo = _mm512_i32logather_epi64(v_join_id, htp, 8);
     v_join_id = _mm512_permute4f128_epi32(v_join_id, _MM_PERM_BADC);
-    v_ht_addr4 = _mm512_i32logather_epi64(v_join_id, htp, 8);
+    v_ht_addr_hi = _mm512_i32logather_epi64(v_join_id, htp, 8);
     v_join_id = _mm512_permute4f128_epi32(v_join_id, _MM_PERM_BADC);
-    v_ht_addr4 = _mm512_add_epi64(v_ht_pos_644, v_ht_addr4);
-    v_ht_addr = _mm512_add_epi64(v_ht_pos_64, v_ht_addr);
-    __m512i upper = _mm512_mask_i64gather_epi32lo(
-        v_zero512, (m_have_tuple >> 8), v_ht_addr4, 0, 1);
-    __m512i lower =
-        _mm512_mask_i64gather_epi32lo(v_zero512, m_have_tuple, v_ht_addr, 0, 1);
-    upper = _mm512_permute4f128_epi32(upper, _MM_PERM_BADC);
-    ht_cell = _mm512_or_epi32(lower, upper);
+    v_ht_addr_hi = _mm512_add_epi64(v_ht_pos_hi, v_ht_addr_hi);
+    v_ht_addr_lo = _mm512_add_epi64(v_ht_pos_lo, v_ht_addr_lo);
+    v_ht_cell_upper = _mm512_mask_i64gather_epi32lo(
+        v_zero512, (m_have_tuple >> 8), v_ht_addr_hi, 0, 1);
+    v_ht_cell_lower = _mm512_mask_i64gather_epi32lo(v_zero512, m_have_tuple,
+                                                    v_ht_addr_lo, 0, 1);
+    v_ht_cell_upper = _mm512_permute4f128_epi32(v_ht_cell_upper, _MM_PERM_BADC);
+    v_ht_cell = _mm512_or_epi32(v_ht_cell_lower, v_ht_cell_upper);
 
 #else
 // no improvement, but it is worse when judging the m_have_tuple
@@ -682,34 +684,33 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
       tmp_cell[i] = *(uint32_t*)(tmp_ht_addr[i]);
     }
 
-    ht_cell = _mm512_load_epi32(tmp_cell);
+    v_ht_cell = _mm512_load_epi32(tmp_cell);
 #endif
 
     //// step 4: compare
     // load raw cell data, then judge whether they are equal ? the AND get
     // rid of invalid keys
-    m_match = _mm512_cmpeq_epi32_mask(v_tuple_cell, ht_cell);
+    m_match = _mm512_cmpeq_epi32_mask(v_tuple_cell, v_ht_cell);
     m_match = _mm512_kand(m_match, m_have_tuple);
-#ifdef SCATTER
+#if RESULTS
+#if !SCATTER
     // it is slower than salar code
     ///// step 5: store matched payloads
     // load payloads
-    v_ht_addr4 = _mm512_add_epi64(v_word_size, v_ht_addr4);
-    v_ht_addr = _mm512_add_epi64(v_word_size, v_ht_addr);
-    // attention!!! should (m_have_tuple>>8)
-    v256_upper = _mm512_mask_i64gather_epi32(v_zero256, (m_match >> 8),
-                                             v_ht_addr4, 0, 1);
-    v256_lower =
-        _mm512_mask_i64gather_epi32(v_zero256, m_match, v_ht_addr, 0, 1);
-    // the first parameter should be at the lower position, and the second one
-    // should lay at the upper position, and the third must be 1
-    v_payloads =
-        _mm512_inserti32x8(_mm512_castsi256_si512(v256_lower), v256_upper, 1);
+    v_ht_addr_hi = _mm512_add_epi64(v_word_size, v_ht_addr_hi);
+    v_ht_addr_lo = _mm512_add_epi64(v_word_size, v_ht_addr_lo);
+
+    v_ht_cell_upper = _mm512_mask_i64gather_epi32lo(v_zero512, (m_match >> 8),
+                                                    v_ht_addr_hi, 0, 1);
+    v_ht_cell_lower =
+        _mm512_mask_i64gather_epi32lo(v_zero512, m_match, v_ht_addr_lo, 0, 1);
+    v_ht_cell_upper = _mm512_permute4f128_epi32(v_ht_cell_upper, _MM_PERM_BADC);
+    v_payloads = _mm512_or_epi32(v_ht_cell_lower, v_ht_cell_upper);
+
     v_offset = _mm512_add_epi32(v_join_id, v_payloads_off);
     _mm512_mask_i32scatter_epi32(temp_payloads, m_match, v_offset, v_payloads,
                                  4);
-#endif
-#if RESULTS
+#else
     __mmask16 m_match_copy = m_match;
 #if GATHERHT
     int mid = vector_scale >> 1;
@@ -736,12 +737,13 @@ lld Linear512Probe(Table* pb, HashTable** ht, int ht_num) {
     }
 #endif
 #endif
+#endif
     // the bucket is over if ht cells =-1 or early break due to match
     // so need to process new cells
     // then process next buckets (increase join_id and load new cells)
     // or process next tuples
     // or abort
-    m_new_cells = _mm512_cmpeq_epi32_mask(ht_cell, v_neg_one512);
+    m_new_cells = _mm512_cmpeq_epi32_mask(v_ht_cell, v_neg_one512);
 #if EARLYBREAK
     m_new_cells = _mm512_kor(m_new_cells, m_match);
 #endif
@@ -791,7 +793,6 @@ uint16_t zero_count(uint16_t a) {
   return num;
 }
 
-#if !HOR
 lld Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num) {
   if (pb->tuple_num <= 0) {
     return 0;
@@ -846,7 +847,7 @@ lld Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num) {
   FILE* fp;
   stringstream sstr;
   sstr << pthread_self();
-  fp = fopen(string(("simd512.csv") + sstr.str()).c_str(), "wr");
+  fp = fopen(string(("simd512hor.csv") + sstr.str()).c_str(), "wr");
   if (fp == 0) {
     assert(false && "can not open file!");
   }
@@ -972,7 +973,7 @@ lld Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num) {
 #endif
   return equal_num;
 }
-#endif
+
 void* ThreadProbe(void* args) {
   ThreadArgs* arg = (ThreadArgs*)args;
   lld upper = 0, lower = 0, matched = 0;
