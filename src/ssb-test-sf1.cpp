@@ -132,22 +132,41 @@ lo_orderdate
   // supplier.tuple_num = 50000;
   // lineorder.tuple_num = 10000000;
 
+  int global_size = upper_log2(dim_date.tuple_num) * dim_date.tuple_size +
+                    upper_log2(customer.tuple_num) * customer.tuple_size +
+                    upper_log2(part.tuple_num) * part.tuple_size +
+                    upper_log2(supplier.tuple_num) * supplier.tuple_size +
+                    64 * 4;
+  void* global_addr = aligned_alloc(64, global_size);
+
   HashTable ht_dim_date;
+  ht_dim_date.global_addr = global_addr;
+  ht_dim_date.global_addr_offset = 0;
   build_linear_ht(ht_dim_date, dim_date, 0, 12, selectity);
   travel_linear_ht(ht_dim_date);
   ht[3] = &ht_dim_date;
 
   HashTable ht_customer;
+  ht_customer.global_addr = global_addr;
+  ht_customer.global_addr_offset =
+      up64(ht_dim_date.slot_num * ht_dim_date.tuple_size);
   build_linear_ht(ht_customer, customer, 0, 8, selectity);
   travel_linear_ht(ht_customer);
   ht[2] = &ht_customer;
 
   HashTable ht_part;
+  ht_part.global_addr = global_addr;
+  ht_part.global_addr_offset =
+      ht_customer.global_addr_offset +
+      up64(ht_customer.slot_num * ht_customer.tuple_size);
   build_linear_ht(ht_part, part, 0, 0, selectity);
   travel_linear_ht(ht_part);
   ht[0] = &ht_part;
 
   HashTable ht_supplier;
+  ht_supplier.global_addr = global_addr;
+  ht_supplier.global_addr_offset =
+      ht_part.global_addr_offset + up64(ht_part.slot_num * ht_part.tuple_size);
   build_linear_ht(ht_supplier, supplier, 0, 4, selectity);
   travel_linear_ht(ht_supplier);
   ht[1] = &ht_supplier;
