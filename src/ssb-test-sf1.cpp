@@ -176,7 +176,7 @@ lo_orderdate
   printf("++++ build hashtable costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
 
   TestSet(&lineorder, "handprobe", times, LinearHandProbe, thread_num);
-  // TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
+  TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
   TestSet(&lineorder, "SIMD512Hor", times, Linear512ProbeHor, thread_num);
   TestSet(&lineorder, "SIMD512", times, Linear512Probe, thread_num);
   // TestSet(&lineorder, "SIMD256Hor", times, LinearSIMDProbeHor, thread_num);
