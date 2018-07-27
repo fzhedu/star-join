@@ -34,7 +34,7 @@ int SsbTestSf1(int argc, char** argv) {
   dim_date.raw_tuple_size = 116;
   int array3[10] = {0, 4};
   SetVectorValue(array3, 2, dim_date.offset);
-  int array33[10] = {4, 4};
+  int array33[10] = {4, PAYLOADSIZE};
   SetVectorValue(array33, 2, dim_date.size);
   dim_date.tuple_size = SumOfVector(dim_date.size);
   tb[0] = &dim_date;
@@ -53,7 +53,7 @@ int SsbTestSf1(int argc, char** argv) {
   customer.raw_tuple_size = 132;
   int array4[10] = {0, 4};
   SetVectorValue(array4, 2, customer.offset);
-  int array44[10] = {4, 4};
+  int array44[10] = {4, PAYLOADSIZE};
   SetVectorValue(array44, 2, customer.size);
   customer.tuple_size = SumOfVector(customer.size);
   tb[1] = &customer;
@@ -71,7 +71,7 @@ int SsbTestSf1(int argc, char** argv) {
   part.raw_tuple_size = 112;
   int array5[10] = {0, 96};
   SetVectorValue(array5, 2, part.offset);
-  int array6[10] = {4, 4};
+  int array6[10] = {4, PAYLOADSIZE};
   SetVectorValue(array6, 2, part.size);
   part.tuple_size = SumOfVector(part.size);
   tb[2] = &part;
@@ -89,7 +89,7 @@ int SsbTestSf1(int argc, char** argv) {
   supplier.raw_tuple_size = 120;
   int array2[10] = {0, 4};
   SetVectorValue(array2, 2, supplier.offset);
-  int array22[10] = {4, 4};
+  int array22[10] = {4, PAYLOADSIZE};
   SetVectorValue(array22, 2, supplier.size);
   supplier.tuple_size = SumOfVector(supplier.size);
   tb[3] = &supplier;
@@ -120,7 +120,7 @@ lo_orderdate
   lineorder.tuple_size = SumOfVector(lineorder.size);
   tb[9] = &lineorder;
 
-  read_data_in_memory(&lineorder, 1);
+  read_data_in_memory(&lineorder, 50);
   //  test(&lineorder, lineorder.start, 0);
   gettimeofday(&t2, NULL);
   deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
