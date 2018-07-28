@@ -31,13 +31,13 @@ typedef unsigned short uint16_t;
 #define NULL_INT 2147483647
 #define BLOCK_SIZE 65536
 #define RESULTS 1
-#define OUTPUT 0
-#define MEMOUTPUT 1
+#define OUTPUT 1
+#define MEMOUTPUT 0
 #define GATHERHT 1
 // if adopt global address
 #define GLOBALADDR 1
 #define PAYLOADSIZE 4
-#define PREFETCH 1
+#define PREFETCH 0
 #define EARLYBREAK 1
 // filter out
 float selectity = 0.5;
