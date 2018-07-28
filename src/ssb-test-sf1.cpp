@@ -1,7 +1,7 @@
 #ifndef __SSBTESTSF1__
 #define __SSBTESTSF1__
 #include <string>
-#define FAVX512 0
+#include "star-simd.h"
 
 #if FAVX512
 #include "star-simd.cpp"
@@ -179,8 +179,8 @@ lo_orderdate
   TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
   TestSet(&lineorder, "SIMD512Hor", times, Linear512ProbeHor, thread_num);
   TestSet(&lineorder, "SIMD512", times, Linear512Probe, thread_num);
-  // TestSet(&lineorder, "SIMD256Hor", times, LinearSIMDProbeHor, thread_num);
-  // TestSet(&lineorder, "SIMD256", times, LinearSIMDProbe, thread_num);
+  TestSet(&lineorder, "SIMD256Hor", times, LinearSIMDProbeHor, thread_num);
+  TestSet(&lineorder, "SIMD256", times, LinearSIMDProbe, thread_num);
   return 0;
 }
 #endif
