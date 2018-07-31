@@ -20,24 +20,24 @@
 #include <immintrin.h>
 #include <cmath>
 #include <sstream>
+#include <fstream>
 #include <map>
 using namespace std;
-#define FAVX512 1
-#if !FAVX512
+#define FAVX512 0
+#if !UNDIFINE
 typedef unsigned long long uint64_t;
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 #endif
+#define DEBUGINFO 0
 #define NULL_INT 2147483647
 #define BLOCK_SIZE 65536
 #define RESULTS 1
-#define OUTPUT 1
-#define MEMOUTPUT 0
+#define OUTPUT 0
 #define GATHERHT 1
 // if adopt global address
-#define GLOBALADDR 1
 #define PAYLOADSIZE 4
-#define PREFETCH 0
+#define PREFETCH 1
 #define EARLYBREAK 1
 // filter out
 float selectity = 0.5;
@@ -80,7 +80,6 @@ uint64_t global_probe_corsur = 0, global_matched = 0;
 int thread_num = 2;
 int ht_num = 4;
 int times = 1;
-int output_buffer_size = 32;
 // typedef unsigned long long uint64_t;
 
 int upper_log2(int num) {
@@ -139,6 +138,7 @@ bool travel_linear_ht(HashTable& ht) {
   if (tmp) {
     count[tmp]++;
   }
+#if DEBUGINFO
   tmp = 0;
   cout << "-------------the cardinality of hash table---------- " << endl;
   for (map<int, int>::iterator it = count.begin(); it != count.end(); ++it) {
@@ -147,11 +147,50 @@ bool travel_linear_ht(HashTable& ht) {
   }
   cout << "max= " << ht.max << endl;
   cout << "tmp = " << tmp << " tuple_num = " << ht.tuple_num << endl;
+#endif
   //  assert(tmp == ht.tuple_num);
   return true;
 }
-
 bool read_data_in_memory(Table* table, int repeats = 1) {
+  fstream iofile(table->path.c_str(), ios::in | ios::out | ios::binary);
+  if (!iofile) {
+    cerr << "open error!" << endl;
+    abort();
+  }
+  char start[BLOCK_SIZE];
+  void* addr = NULL;
+  uint64_t size = table->tuple_num * table->tuple_size, tuple_num = 0;
+  addr = aligned_alloc(64, size * repeats);
+  assert(addr != NULL && "limited memory");
+  uint64_t dest_off = 0;
+  for (int r = 0; r < repeats; ++r) {
+    iofile.seekg(0, ios::beg);
+    while (iofile.read(start, BLOCK_SIZE) != NULL) {
+      int num = *(int*)(start + BLOCK_SIZE - 4);
+      tuple_num += num;
+      // copy needed cells from each row
+      for (int i = 0; i < num; ++i) {
+        for (int m = 0; m < table->offset.size(); ++m) {
+          memcpy(addr + dest_off,
+                 (start + i * table->raw_tuple_size + table->offset[m]),
+                 table->size[m]);
+          dest_off += table->size[m];
+        }
+      }
+    }
+  }
+  iofile.close();
+  table->start = addr;
+  table->tuple_num = table->tuple_num * repeats;
+  table->upper = table->tuple_num;  // special
+#if DEBUGINFO
+  cout << table->name << " tuple num = " << table->tuple_num << " but read "
+       << tuple_num << " repeats= " << repeats << endl;
+#endif
+  assert(table->tuple_num == tuple_num * repeats);
+  return true;
+}
+bool read_data_in_memory_old(Table* table, int repeats = 1) {
   void* addr = NULL, *start = NULL;
   struct stat f_stat;
   int fd = -1;
@@ -190,8 +229,10 @@ bool read_data_in_memory(Table* table, int repeats = 1) {
   table->start = addr;
   table->tuple_num = table->tuple_num * repeats;
   table->upper = table->tuple_num;  // special
+#if DEBUGINFO
   cout << table->name << " tuple num = " << table->tuple_num << " but read "
        << tuple_num << " repeats= " << repeats << endl;
+#endif
   assert(table->tuple_num == tuple_num * repeats);
   return true;
 }
@@ -373,16 +414,16 @@ uint64_t TupleAtATimeProbe(Table* pb, HashTable** ht, int ht_num,
                            ht_num, ht_num - 1, ret_size, output);
     if (res) {
       ++num;
-#if MEMOUTPUT
+#if RESULTS
       memcpy(payloads + cur_payloads, res, result_size);
       cur_payloads += result_size;
-#endif
 #if OUTPUT
       // payloads: right,left0,left1...
       for (int i = 1; i <= ht_num; ++i) {
         fprintf(fp, "%d,", *((uint32_t*)(res + i * PAYLOADSIZE)));
       }
       fprintf(fp, "%d\n", *((uint32_t*)(res)));
+#endif
 #endif
     }
   }
@@ -440,6 +481,8 @@ void* ThreadProbe(void* args) {
   global_matched += matched;
   pthread_mutex_unlock(&mutex);
   free(payloads);
+  delete pb;
+  delete arg;
   return NULL;
 }
 void TestSet(Table* tb, string fun_name, int times, ProbeFunc func,

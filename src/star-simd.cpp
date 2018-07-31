@@ -310,7 +310,8 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
       uint32_t global_off = ht_pos[j];
       __m512i key_x16 = _mm512_set1_epi32(tuple_cell[j]);
       short flag = 0;
-#if !OLD
+// pay attention to hor_probe_step
+#if OLD
       for (;;) {
         __m512i v_payloads_off =
             _mm512_add_epi32(_mm512_set1_epi32(global_off), v_tuple_off);
@@ -532,7 +533,7 @@ uint64_t LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num,
     v_new_cells = _mm256_and_si256(v_new_cells, v_have_tuple);
     // gather cell values in new tuples
     v_tuple_cell = _mm256_mask_i32gather_epi32(
-        v_tuple_cell, start_addr,
+        v_tuple_cell, (int*)start_addr,
         _mm256_add_epi32(v_addr_offset, v_right_index), v_new_cells, 1);
 
 ////// step 3: load new values in hash tables
@@ -576,9 +577,11 @@ uint64_t LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num,
         _mm_load_si128(reinterpret_cast<__m128i*>(ht_pos)));
 
     v_ht_addr4 = _mm256_i32gather_epi64(
-        htp, _mm_load_si128(reinterpret_cast<__m128i*>(&join_id[4])), 8);
+        (const long long*)htp,
+        _mm_load_si128(reinterpret_cast<__m128i*>(&join_id[4])), 8);
     v_ht_addr = _mm256_i32gather_epi64(
-        htp, _mm_load_si128(reinterpret_cast<__m128i*>(join_id)), 8);
+        (const long long*)htp,
+        _mm_load_si128(reinterpret_cast<__m128i*>(join_id)), 8);
 
     v_ht_addr4 = _mm256_add_epi64(v_ht_pos_644, v_ht_addr4);
     v_ht_addr = _mm256_add_epi64(v_ht_pos_64, v_ht_addr);
@@ -807,7 +810,7 @@ uint64_t LinearSIMDProbeHor(Table* pb, HashTable** ht, int ht_num,
     v_new_cells = _mm256_and_si256(v_new_cells, v_have_tuple);
     // gather cell values in new tuples
     v_tuple_cell = _mm256_mask_i32gather_epi32(
-        v_tuple_cell, start_addr,
+        v_tuple_cell, (const int*)start_addr,
         _mm256_add_epi32(v_addr_offset, v_right_index), v_new_cells, 1);
 
 ////// step 3: load new values in hash tables
@@ -848,7 +851,8 @@ uint64_t LinearSIMDProbeHor(Table* pb, HashTable** ht, int ht_num,
       __m256i key_x8 = _mm256_set1_epi32(tuple_cell[j]);
 #if PREFETCH
       if (j < 15) {
-        _mm_prefetch(ht_pos[j + 1] + htp[join_id[j + 1]], _MM_HINT_T0);
+        _mm_prefetch((const void*)(ht_pos[j + 1] + htp[join_id[j + 1]]),
+                     _MM_HINT_T0);
       }
 #endif
       short flag = 0;
@@ -1080,8 +1084,8 @@ uint64_t SIMDProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
 
     // gather cell values in new tuples
     v_tuple_cell = _mm256_mask_i32gather_epi32(
-        v_tuple_cell, start_addr, _mm256_add_epi32(v_addr_offset, right_index),
-        v_have_tuple, 1);
+        v_tuple_cell, (const int*)start_addr,
+        _mm256_add_epi32(v_addr_offset, right_index), v_have_tuple, 1);
     ////// step 3: load new values in hash tables
     // get rid of invalid cells
     __m256i v_invalid = _mm256_cmpeq_epi32(v_tuple_cell, null_int);
@@ -1098,9 +1102,11 @@ uint64_t SIMDProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
         _mm_load_si128(reinterpret_cast<__m128i*>(ht_pos)));
 
     v_ht_addr4 = _mm256_i32gather_epi64(
-        htp, _mm_load_si128(reinterpret_cast<__m128i*>(&join_id[4])), 8);
+        (const long long*)htp,
+        _mm_load_si128(reinterpret_cast<__m128i*>(&join_id[4])), 8);
     v_ht_addr = _mm256_i32gather_epi64(
-        htp, _mm_load_si128(reinterpret_cast<__m128i*>(join_id)), 8);
+        (const long long*)htp,
+        _mm_load_si128(reinterpret_cast<__m128i*>(join_id)), 8);
 
     ht_cell = _mm256_set_m128i(
         _mm256_mask_i64gather_epi32(

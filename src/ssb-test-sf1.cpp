@@ -1,6 +1,5 @@
 #ifndef __SSBTESTSF1__
 #define __SSBTESTSF1__
-#include <string>
 #include "star-simd.h"
 
 #if FAVX512
@@ -9,6 +8,7 @@
 #include "star-simd-phi.cpp"
 #endif
 int SsbTestSf1(int argc, char** argv) {
+  cout << "----------------SSB=1-------------------" << endl;
   struct timeval t1, t2;
   if (argc > 1) {
     times = atoi(argv[1]);
@@ -19,9 +19,11 @@ int SsbTestSf1(int argc, char** argv) {
   int deltaT = 0;
   gettimeofday(&t1, NULL);
   table_factor = (rand() << 1) | 1;
-  cout << "table_factor = " << table_factor << endl;
+  // cout << "table_factor = " << table_factor << endl;
   table_factor = (rand() << 1) | 1;
+#if DEBUGINFO
   cout << "table_factor = " << table_factor << endl;
+#endif
 
   Table dim_date;
   dim_date.name = "dim_date";
@@ -39,13 +41,14 @@ int SsbTestSf1(int argc, char** argv) {
   dim_date.tuple_size = SumOfVector(dim_date.size);
   tb[0] = &dim_date;
   read_data_in_memory(&dim_date);
+#if DEBUGINFO
   test(&dim_date, dim_date.start, 0);
+#endif
 
   Table customer;
   customer.name = "customer";
   customer.tuple_num = 30000;
 #if FAVX512
-
   customer.path = "/home/claims/data/ssb/sf1/T2G0P0";
 #else
   customer.path = "/tmp/share_nfs/sf1/T2G0P0";
@@ -58,7 +61,9 @@ int SsbTestSf1(int argc, char** argv) {
   customer.tuple_size = SumOfVector(customer.size);
   tb[1] = &customer;
   read_data_in_memory(&customer);
-  // test(&customer, customer.start, 0);
+#if DEBUGINFO
+  test(&customer, customer.start, 0);
+#endif
 
   Table part;
   part.name = "part";
@@ -76,7 +81,9 @@ int SsbTestSf1(int argc, char** argv) {
   part.tuple_size = SumOfVector(part.size);
   tb[2] = &part;
   read_data_in_memory(&part);
-  //  test(&part, part.start, 0);
+#if DEBUGINFO
+  test(&part, part.start, 0);
+#endif
 
   Table supplier;
   supplier.name = "supplier";
@@ -94,7 +101,9 @@ int SsbTestSf1(int argc, char** argv) {
   supplier.tuple_size = SumOfVector(supplier.size);
   tb[3] = &supplier;
   read_data_in_memory(&supplier);
-  // test(&supplier, supplier.start, 0);
+#if DEBUGINFO
+  test(&supplier, supplier.start, 0);
+#endif
 
   /* raw data schema
 lo_orderkey,0
@@ -179,8 +188,15 @@ lo_orderdate
   TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
   TestSet(&lineorder, "SIMD512Hor", times, Linear512ProbeHor, thread_num);
   TestSet(&lineorder, "SIMD512", times, Linear512Probe, thread_num);
-  TestSet(&lineorder, "SIMD256Hor", times, LinearSIMDProbeHor, thread_num);
-  TestSet(&lineorder, "SIMD256", times, LinearSIMDProbe, thread_num);
+  // TestSet(&lineorder, "SIMD256Hor", times, LinearSIMDProbeHor, thread_num);
+  // TestSet(&lineorder, "SIMD256", times, LinearSIMDProbe, thread_num);
+
+  free(global_addr);
+  free(dim_date.start);
+  free(customer.start);
+  free(supplier.start);
+  free(lineorder.start);
+  free(part.start);
   return 0;
 }
 #endif

@@ -1,5 +1,5 @@
-#ifndef __SIMDTEST__
-#define __SIMDTEST__
+#ifndef __SIMDPHITEST__
+#define __SIMDPHITEST__
 #include "star-simd.h"
 
 // use short mask to avoid long mask
