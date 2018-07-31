@@ -23,8 +23,8 @@
 #include <fstream>
 #include <map>
 using namespace std;
-#define FAVX512 0
-#if !UNDIFINE
+#define FAVX512 1
+#if UNDIFINE
 typedef unsigned long long uint64_t;
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -163,21 +163,23 @@ bool read_data_in_memory(Table* table, int repeats = 1) {
   addr = aligned_alloc(64, size * repeats);
   assert(addr != NULL && "limited memory");
   uint64_t dest_off = 0;
-  for (int r = 0; r < repeats; ++r) {
-    iofile.seekg(0, ios::beg);
-    while (iofile.read(start, BLOCK_SIZE) != NULL) {
-      int num = *(int*)(start + BLOCK_SIZE - 4);
-      tuple_num += num;
-      // copy needed cells from each row
-      for (int i = 0; i < num; ++i) {
-        for (int m = 0; m < table->offset.size(); ++m) {
-          memcpy(addr + dest_off,
-                 (start + i * table->raw_tuple_size + table->offset[m]),
-                 table->size[m]);
-          dest_off += table->size[m];
-        }
+  iofile.seekg(0, ios::beg);
+  while (iofile.read(start, BLOCK_SIZE)) {
+    int num = *(int*)(start + BLOCK_SIZE - 4);
+    tuple_num += num;
+    // copy needed cells from each row
+    for (int i = 0; i < num; ++i) {
+      for (int m = 0; m < table->offset.size(); ++m) {
+        memcpy(addr + dest_off,
+               (start + i * table->raw_tuple_size + table->offset[m]),
+               table->size[m]);
+        dest_off += table->size[m];
       }
     }
+  }
+  assert(dest_off == size);
+  for (int r = 1; r < repeats; ++r) {
+    memcpy(addr + size * r, addr, size);
   }
   iofile.close();
   table->start = addr;
@@ -482,7 +484,6 @@ void* ThreadProbe(void* args) {
   pthread_mutex_unlock(&mutex);
   free(payloads);
   delete pb;
-  delete arg;
   return NULL;
 }
 void TestSet(Table* tb, string fun_name, int times, ProbeFunc func,

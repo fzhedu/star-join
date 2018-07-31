@@ -107,7 +107,6 @@ lo_partkey,12
 lo_suppkey,16
 lo_orderdate
    */
-  cout << "dimensional tables are loaded-----" << endl;
   Table lineorder;
   lineorder.name = "lineorder";
   lineorder.tuple_num = 600038145;
