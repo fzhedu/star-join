@@ -30,7 +30,6 @@ uint64_t Linear512Probe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
            result_size = (ht_num + 1) * PAYLOADSIZE, buckets_minus_1[16] = {0},
            shift[16] = {0};
   __attribute__((aligned(32))) uint64_t htp[16] = {0};
-
   for (int i = 0; i <= vector_scale; ++i) {
     base_off[i] = i * pb->tuple_size;
     payloads_off[i] = i * 6;  // it is related to temp_payloads
@@ -206,7 +205,7 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
            cur_payloads = 0, global_addr_offset[16] = {0}, tmp_cell[16],
            *addr_offset, payloads_addr[16][6] = {0}, *ht_pos, *tuple_cell,
            *join_id, base_off[32], tuple_cell_offset[16] = {0},
-           hor_probe_step = 8 * ht[0]->tuple_size, left_size[16] = {0},
+           hor_probe_step = 16 * ht[0]->tuple_size, left_size[16] = {0},
            ht_cell_offset[16] = {0}, tuple_off[16] = {0},
            result_size = (ht_num + 1) * PAYLOADSIZE, buckets_minus_1[16] = {0},
            shift[16] = {0}, h_buf[16] = {0};
@@ -311,12 +310,14 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
       __m512i key_x16 = _mm512_set1_epi32(tuple_cell[j]);
       short flag = 0;
 // pay attention to hor_probe_step
-#if OLD
+#if !OLD
       for (;;) {
         __m512i v_payloads_off =
             _mm512_add_epi32(_mm512_set1_epi32(global_off), v_tuple_off);
-        __m512i tab = _mm512_mask_i32gather_epi32(
-            v_neg_one512, 15, v_payloads_off, ht[0]->global_addr, 1);
+        //__m512i tab = _mm512_mask_i32gather_epi32(
+        //  v_neg_one512, 15, v_payloads_off, ht[0]->global_addr, 1);
+        __m512i tab =
+            _mm512_i32gather_epi32(v_payloads_off, ht[0]->global_addr, 1);
         __mmask16 out = _mm512_cmpeq_epi32_mask(tab, key_x16);
         if (out > 0) {
           int znum = _tzcnt_u32(out);

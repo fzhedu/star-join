@@ -129,7 +129,7 @@ lo_orderdate
   lineorder.tuple_size = SumOfVector(lineorder.size);
   tb[9] = &lineorder;
 
-  read_data_in_memory(&lineorder, 1);
+  read_data_in_memory(&lineorder, 100);
   //  test(&lineorder, lineorder.start, 0);
   gettimeofday(&t2, NULL);
   deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
