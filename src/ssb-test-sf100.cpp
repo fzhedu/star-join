@@ -140,8 +140,10 @@ lo_orderdate
       upper_log2(dim_date.tuple_num) * dim_date.tuple_size +
       upper_log2(customer.tuple_num) * customer.tuple_size +
       upper_log2(part.tuple_num) * part.tuple_size +
-      upper_log2(supplier.tuple_num) * supplier.tuple_size + 64 * 4;
+      upper_log2(supplier.tuple_num) * supplier.tuple_size + 64 * 8;
   void* global_addr = aligned_alloc(64, global_size);
+  memset(global_addr, -1, global_size);
+
   cout << "global size = " << global_size << endl;
   HashTable ht_dim_date;
   ht_dim_date.global_addr = global_addr;

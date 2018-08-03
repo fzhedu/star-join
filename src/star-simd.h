@@ -23,8 +23,9 @@
 #include <fstream>
 #include <map>
 using namespace std;
+// CPU or PHI
 #define FAVX512 1
-#if UNDIFINE
+#if !FAVX512
 typedef unsigned long long uint64_t;
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -40,7 +41,7 @@ typedef unsigned short uint16_t;
 #define PREFETCH 1
 #define EARLYBREAK 1
 // filter out
-float selectity = 0.5;
+float selectity = 0.99;
 #define INVALID 2147483647
 #define up64(a) (a - (a % 64) + 64)
 struct Table {
@@ -64,7 +65,8 @@ struct HashTable {
   int shift;
   int max;
   int probe_offset;
-}* ht[100];
+  uint64_t ht_size;
+}* ht[10];
 typedef uint64_t (*ProbeFunc)(Table* pb, HashTable** ht, int ht_num,
                               char* payloads);
 struct ThreadArgs {
@@ -94,37 +96,36 @@ bool build_linear_ht(HashTable& ht, Table& table, int key_offset,
   ht.tuple_size = table.tuple_size;        //
   ht.key_offset = key_offset;              // 0
   ht.probe_offset = probe_offset;
-  uint64_t ht_size = ht.slot_num * ht.tuple_size;
+  ht.ht_size = ht.slot_num * ht.tuple_size;
   ht.addr = (void*)(ht.global_addr + ht.global_addr_offset);
   ht.shift = 32 - log2(ht.slot_num);
   ht.max = 0;
-  memset(ht.addr, -1, ht_size);
+  // memset(ht.addr, -1, ht_size);
   uint32_t key, hash = 0;
   uint64_t offset = 0;
-  for (uint32_t i = 0; i < (table.tuple_num - bound) * table.tuple_size;
+  for (uint32_t i = 0; i < (ht.tuple_num) * table.tuple_size;
        i += table.tuple_size) {
     // enum the key in the table
-    key = *(uint*)(table.start + i + key_offset);
+    key = *(uint32_t*)(table.start + i + key_offset);
     ht.max = (key > ht.max ? key : ht.max);
     // set filter
     // if (key < bound) continue;
     // compute the hash value
-    hash = ((uint)(key * table_factor)) >> ht.shift;
+    hash = ((uint32_t)(key * table_factor)) >> ht.shift;
     offset = hash * ht.tuple_size;
     // travel corresponding position in the hash table
-    while (*(uint*)(ht.addr + offset + key_offset) != -1) {
+    while (*(uint32_t*)(ht.addr + offset + key_offset) != -1) {
       offset += ht.tuple_size;
-      offset = offset > ht_size ? offset - ht_size : offset;
+      offset = offset >= ht.ht_size ? offset - ht.ht_size : offset;
     }
     memcpy(ht.addr + offset, table.start + i, table.tuple_size);
   }
   return true;
 }
 bool travel_linear_ht(HashTable& ht) {
-  unsigned ht_size = ht.slot_num * ht.tuple_size;
   map<int, int> count;
   int tmp = 0, id = 0;
-  for (int offset = 0; offset < ht_size; offset += ht.tuple_size) {
+  for (uint64_t offset = 0; offset < ht.ht_size; offset += ht.tuple_size) {
     // find the bucket which is not null
     if (*(int*)(ht.addr + offset + ht.key_offset) != -1) {
       ++tmp;
@@ -147,8 +148,8 @@ bool travel_linear_ht(HashTable& ht) {
   }
   cout << "max= " << ht.max << endl;
   cout << "tmp = " << tmp << " tuple_num = " << ht.tuple_num << endl;
+  assert(tmp == ht.tuple_num);
 #endif
-  //  assert(tmp == ht.tuple_num);
   return true;
 }
 bool read_data_in_memory(Table* table, int repeats = 1) {
@@ -192,52 +193,7 @@ bool read_data_in_memory(Table* table, int repeats = 1) {
   assert(table->tuple_num == tuple_num * repeats);
   return true;
 }
-bool read_data_in_memory_old(Table* table, int repeats = 1) {
-  void* addr = NULL, *start = NULL;
-  struct stat f_stat;
-  int fd = -1;
-  if ((fd = open(table->path.c_str(), O_RDONLY)) == -1) return false;
-  if (fstat(fd, &f_stat)) return false;
-  // int len = lseek(fd, 0, SEEK_END);
-  uint64_t size = table->tuple_num * table->tuple_size, tuple_num = 0;
-  addr = aligned_alloc(64, size * repeats);
-  assert(addr != NULL);
-  if ((start = mmap(0, f_stat.st_size, PROT_READ, MAP_PRIVATE, fd, 0)) ==
-      MAP_FAILED) {
-    return false;
-  }
-  int num = 0;
-  // read each BLOCK, then get each tuple in a block
-  for (uint64_t k = 0, j = 0; k < f_stat.st_size; k += BLOCK_SIZE) {
-    num = *(int*)(start + k + BLOCK_SIZE - 4);
-    tuple_num += num;
-    // copy needed cells from each row
-    for (int i = 0; i < num; ++i) {
-      for (int m = 0; m < table->offset.size(); ++m) {
-        memcpy(addr + j,
-               (start + k + i * table->raw_tuple_size + table->offset[m]),
-               table->size[m]);
-        j += table->size[m];
-      }
-    }
-  }
-  for (int j = 1; j < repeats; ++j) {
-    memcpy(addr + size * j, addr, size);
-  }
-  if (munmap(start, f_stat.st_size)) {
-    return false;
-  }
-  close(fd);
-  table->start = addr;
-  table->tuple_num = table->tuple_num * repeats;
-  table->upper = table->tuple_num;  // special
-#if DEBUGINFO
-  cout << table->name << " tuple num = " << table->tuple_num << " but read "
-       << tuple_num << " repeats= " << repeats << endl;
-#endif
-  assert(table->tuple_num == tuple_num * repeats);
-  return true;
-}
+
 int SumOfVector(vector<int>& vec) {
   int sum = 0;
   for (int i = 0; i < vec.size(); ++i) {
@@ -307,6 +263,7 @@ uint64_t LinearHandProbe(Table* pb, HashTable** ht, int ht_num,
 #endif
         }
         ht_off += ht[j]->tuple_size;
+        ht_off = ht_off >= ht[j]->ht_size ? ht_off - ht[j]->ht_size : ht_off;
       }
       tmp = tmp & flag;
     }
@@ -378,6 +335,7 @@ char* LinearProbeTuple(void* src, int src_size, HashTable** ht, int ht_nu,
 #endif
     }
     ht_off += ht[cur]->tuple_size;
+    ht_off = ht_off >= ht[cur]->ht_size ? ht_off - ht[cur]->ht_size : ht_off;
   }
 
 #if !EARLYBREAK

@@ -129,7 +129,7 @@ lo_orderdate
   lineorder.tuple_size = SumOfVector(lineorder.size);
   tb[9] = &lineorder;
 
-  read_data_in_memory(&lineorder, 100);
+  read_data_in_memory(&lineorder, 1);
   //  test(&lineorder, lineorder.start, 0);
   gettimeofday(&t2, NULL);
   deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
@@ -145,8 +145,9 @@ lo_orderdate
                     upper_log2(customer.tuple_num) * customer.tuple_size +
                     upper_log2(part.tuple_num) * part.tuple_size +
                     upper_log2(supplier.tuple_num) * supplier.tuple_size +
-                    64 * 4;
+                    64 * 8;
   void* global_addr = aligned_alloc(64, global_size);
+  memset(global_addr, -1, global_size);
 
   HashTable ht_dim_date;
   ht_dim_date.global_addr = global_addr;

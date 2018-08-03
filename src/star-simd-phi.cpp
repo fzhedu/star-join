@@ -205,14 +205,14 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
           v_shift, v_buckets_minus_1, v_cell_hash, v_ht_pos, v_tuple_off,
           v_neg_one512 = _mm512_set1_epi32(-1), v_ht_global_addr_offset,
           v_zero512 = _mm512_set1_epi32(0), v_join_id = _mm512_set1_epi32(0),
-          v_one = _mm512_set1_epi32(1);
+          v_one = _mm512_set1_epi32(1), v_payloads_off;
   __attribute__((aligned(64)))
   uint32_t cur_offset = 0,
            cur_payloads = 0, global_addr_offset[16] = {0}, tmp_cell[16],
            *addr_offset, payloads_addr[16][6] = {0}, *ht_pos, *tuple_cell,
            *join_id, base_off[32], tuple_cell_offset[16] = {0},
            hor_probe_step = 16 * ht[0]->tuple_size, left_size[16] = {0},
-           ht_cell_offset[16] = {0}, tuple_off[16] = {0},
+           ht_cell_offset[16] = {0}, tuple_off[16] = {0}, *payloads_off,
            result_size = (ht_num + 1) * PAYLOADSIZE, buckets_minus_1[16] = {0},
            shift[16] = {0}, h_buf[16] = {0};
   __attribute__((aligned(64))) uint64_t htp[16] = {0}, bucket_upper[16] = {0};
@@ -229,12 +229,15 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
     htp[i] = (uint64_t)ht[i]->addr;
     bucket_upper[i] = buckets_minus_1[i] * left_size[i];
     global_addr_offset[i] = ht[i]->global_addr_offset;
+  }
+  for (int i = 0; i < vector_scale; ++i) {
     tuple_off[i] = i * ht[0]->tuple_size;
   }
   ht_pos = (uint32_t*)&v_ht_pos;
   join_id = (uint32_t*)&v_join_id;
   addr_offset = (uint32_t*)&v_addr_offset;
   tuple_cell = (uint32_t*)&v_tuple_cell;
+  payloads_off = (uint32_t*)&v_payloads_off;
 
   uint64_t equal_num = 0;
   v_base_offset = _mm512_load_si512(base_off);
@@ -314,24 +317,24 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
       __m512i key_x16 = _mm512_set1_epi32(tuple_cell[j]);
       short flag = 0;
       for (;;) {
-        __m512i v_payloads_off =
+        v_payloads_off =
             _mm512_add_epi32(_mm512_set1_epi32(global_off), v_tuple_off);
+        // avoid overflow
+        __m512i v_global_upper = _mm512_set1_epi32(
+            global_addr_offset[join_id[j]] + bucket_upper[join_id[j]]);
+        __mmask16 greater =
+            _mm512_cmpge_epi32_mask(v_payloads_off, v_global_upper);
+        v_payloads_off =
+            _mm512_mask_sub_epi32(v_payloads_off, greater, v_payloads_off,
+                                  _mm512_set1_epi32(bucket_upper[join_id[j]]));
         __m512i tab =
             _mm512_i32gather_epi32(v_payloads_off, ht[0]->global_addr, 1);
-
         __mmask16 out = _mm512_cmpeq_epi32_mask(tab, key_x16);
         if (out > 0) {
-          int znum = zero_count(out);
-          // avoid overflowing
-          if (znum * left_size[join_id[j]] + global_off <=
-              global_addr_offset[join_id[j]] + bucket_upper[join_id[j]]) {
-            payloads_addr[j][join_id[j]] =
-                (global_off + znum * left_size[join_id[j]] + WORDSIZE);
-            flag = 1;
-#if EARLYBREAK
-            break;
-#endif
-          }
+          int znum = _tzcnt_u32(out);
+          payloads_addr[j][join_id[j]] = (payloads_off[znum] + WORDSIZE);
+          flag = 1;
+          break;
         }
         out = _mm512_cmpeq_epi32_mask(tab, v_neg_one512);
         if (out > 0) break;

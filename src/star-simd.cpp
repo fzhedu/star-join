@@ -21,7 +21,7 @@ uint64_t Linear512Probe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
           v_zero512 = _mm512_set1_epi32(0), v_join_id = _mm512_set1_epi32(0),
           v_one = _mm512_set1_epi32(1), v_payloads, v_payloads_off,
           v_ht_global_addr_offset, v_word_size = _mm512_set1_epi32(WORDSIZE);
-  __attribute__((aligned(32)))
+  __attribute__((aligned(64)))
   uint32_t cur_offset = 0,
            cur_payloads = 0, global_addr_offset[16] = {0}, tmp_cell[16],
            *addr_offset, temp_payloads[16][6] = {0}, *ht_pos, *join_id,
@@ -29,7 +29,7 @@ uint64_t Linear512Probe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
            ht_cell_offset[16] = {0}, payloads_off[32],
            result_size = (ht_num + 1) * PAYLOADSIZE, buckets_minus_1[16] = {0},
            shift[16] = {0};
-  __attribute__((aligned(32))) uint64_t htp[16] = {0};
+  __attribute__((aligned(64))) uint64_t htp[16] = {0};
   for (int i = 0; i <= vector_scale; ++i) {
     base_off[i] = i * pb->tuple_size;
     payloads_off[i] = i * 6;  // it is related to temp_payloads
@@ -48,7 +48,7 @@ uint64_t Linear512Probe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
   addr_offset = (uint32_t*)&v_addr_offset;
 
   uint64_t equal_num = 0;
-  v_base_offset = _mm512_load_si512((__m512i*)(&base_off));
+  v_base_offset = _mm512_load_epi32(base_off);
   v_payloads_off = _mm512_load_epi32(payloads_off);
 #if OUTPUT
   FILE* fp;
@@ -197,19 +197,19 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
           v_left_size = _mm512_set1_epi32(8), v_bucket_offset, ht_cell,
           v_factor = _mm512_set1_epi32(table_factor), v_ht_cell_offset, v_shift,
           v_buckets_minus_1, v_cell_hash, v_ht_pos, v_ht_global_addr_offset,
-          v_neg_one512 = _mm512_set1_epi32(-1), v_tuple_off,
+          v_neg_one512 = _mm512_set1_epi32(-1), v_tuple_off, v_payloads_off,
           v_zero512 = _mm512_set1_epi32(0), v_join_id = _mm512_set1_epi32(0),
           v_one = _mm512_set1_epi32(1);
-  __attribute__((aligned(32)))
+  __attribute__((aligned(64)))
   uint32_t cur_offset = 0,
            cur_payloads = 0, global_addr_offset[16] = {0}, tmp_cell[16],
            *addr_offset, payloads_addr[16][6] = {0}, *ht_pos, *tuple_cell,
            *join_id, base_off[32], tuple_cell_offset[16] = {0},
            hor_probe_step = 16 * ht[0]->tuple_size, left_size[16] = {0},
-           ht_cell_offset[16] = {0}, tuple_off[16] = {0},
+           ht_cell_offset[16] = {0}, tuple_off[16] = {0}, *payloads_off,
            result_size = (ht_num + 1) * PAYLOADSIZE, buckets_minus_1[16] = {0},
            shift[16] = {0}, h_buf[16] = {0};
-  __attribute__((aligned(32))) uint64_t htp[16] = {0}, bucket_upper[16] = {0};
+  __attribute__((aligned(64))) uint64_t htp[16] = {0}, bucket_upper[16] = {0};
 
   for (int i = 0; i <= vector_scale; ++i) {
     base_off[i] = i * pb->tuple_size;
@@ -221,8 +221,10 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
     shift[i] = ht[i]->shift;
     buckets_minus_1[i] = ht[i]->slot_num - 1;
     htp[i] = (uint64_t)ht[i]->addr;
-    bucket_upper[i] = buckets_minus_1[i] * left_size[i];
+    bucket_upper[i] = ht[i]->slot_num * left_size[i];
     global_addr_offset[i] = ht[i]->global_addr_offset;
+  }
+  for (int i = 0; i < vector_scale; ++i) {
     tuple_off[i] = i * ht[0]->tuple_size;
   }
   ht_pos = (uint32_t*)&v_ht_pos;
@@ -230,6 +232,7 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
 
   addr_offset = (uint32_t*)&v_addr_offset;
   tuple_cell = (uint32_t*)&v_tuple_cell;
+  payloads_off = (uint32_t*)&v_payloads_off;
   uint64_t equal_num = 0;
   v_base_offset = _mm512_load_si512(base_off);
   v_tuple_off = _mm512_load_si512(tuple_off);
@@ -306,63 +309,34 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
 #endif
     // probe buckets horizationally for each key
     for (int j = 0; j != 16; ++j) {
+      if (((m_have_tuple >> j) & 1) == 0) {
+        continue;
+      }
       uint32_t global_off = ht_pos[j];
       __m512i key_x16 = _mm512_set1_epi32(tuple_cell[j]);
       short flag = 0;
-// pay attention to hor_probe_step
-#if !OLD
+      // pay attention to hor_probe_step
       for (;;) {
-        __m512i v_payloads_off =
+        v_payloads_off =
             _mm512_add_epi32(_mm512_set1_epi32(global_off), v_tuple_off);
-        //__m512i tab = _mm512_mask_i32gather_epi32(
-        //  v_neg_one512, 15, v_payloads_off, ht[0]->global_addr, 1);
+        // avoid overflow
+        __m512i v_global_upper = _mm512_set1_epi32(
+            global_addr_offset[join_id[j]] + bucket_upper[join_id[j]]);
+        __mmask16 greater =
+            _mm512_cmpge_epi32_mask(v_payloads_off, v_global_upper);
+        v_payloads_off =
+            _mm512_mask_sub_epi32(v_payloads_off, greater, v_payloads_off,
+                                  _mm512_set1_epi32(bucket_upper[join_id[j]]));
         __m512i tab =
             _mm512_i32gather_epi32(v_payloads_off, ht[0]->global_addr, 1);
         __mmask16 out = _mm512_cmpeq_epi32_mask(tab, key_x16);
         if (out > 0) {
           int znum = _tzcnt_u32(out);
-          // avoid overflowing
-          if (znum * left_size[join_id[j]] + global_off <=
-              global_addr_offset[join_id[j]] + bucket_upper[join_id[j]]) {
-            payloads_addr[j][join_id[j]] =
-                (global_off + znum * left_size[join_id[j]] + WORDSIZE);
-            flag = 1;
-#if EARLYBREAK
-            break;
-#endif
-          }
+          payloads_addr[j][join_id[j]] = (payloads_off[znum] + WORDSIZE);
+          flag = 1;
+          break;
         }
         out = _mm512_cmpeq_epi32_mask(tab, v_neg_one512);
-
-        if (out > 0) break;
-        global_off =
-            (global_off + hor_probe_step) >=
-                    (global_addr_offset[join_id[j]] + bucket_upper[join_id[j]])
-                ? global_off + hor_probe_step - bucket_upper[join_id[j]]
-                : global_off + hor_probe_step;
-      }
-#else
-      for (;;) {
-        __m512i tab =
-            _mm512_loadu_si512((void*)(ht[0]->global_addr + global_off));
-        __mmask16 out = _mm512_cmpeq_epi32_mask(tab, key_x16);
-        out = _mm512_kand(out, 0x5555);
-        if (out > 0) {
-          int znum = (_tzcnt_u32(out) >> 1);
-          // avoid overflowing
-          if (znum * left_size[join_id[j]] + global_off <=
-              global_addr_offset[join_id[j]] + bucket_upper[join_id[j]]) {
-            payloads_addr[j][join_id[j]] =
-                (global_off + znum * left_size[join_id[j]] + WORDSIZE);
-            flag = 1;
-#if EARLYBREAK
-            break;
-#endif
-          }
-        }
-        out = _mm512_cmpeq_epi32_mask(tab, v_neg_one512);
-        out = _mm512_kand(out, 0x5555);
-
         if (out > 0) break;
         global_off =
             (global_off + hor_probe_step) >=
@@ -371,7 +345,6 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
                 : global_off + hor_probe_step;
       }
 
-#endif
       m_match = _mm512_kor(m_match, (flag << j));
     }
     m_match = _mm512_kand(m_match, m_have_tuple);
@@ -435,7 +408,7 @@ uint64_t LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num,
       v_buckets_minus_1 = _mm256_set1_epi32(0), v_base_offset, v_offset,
       v_addr_offset;
   const uint32_t offset_index = 0x76543210, tuple_scale = 8;
-  __attribute__((aligned(32))) int32_t base_off[10], *ht_pos, *join_id,
+  __attribute__((aligned(64))) int32_t base_off[10], *ht_pos, *join_id,
       *tuple_cell, *addr_offset, *done, *have_tuple, *offset,
       tuple_cell_offset[10] = {0}, left_size[8] = {0}, ht_cell_offset[8] = {0},
       buckets_minus_1[8] = {0}, mask[16] = {0}, shift[8] = {0}, tmp_cell[8];
@@ -443,10 +416,10 @@ uint64_t LinearSIMDProbe(Table* pb, HashTable** ht, int ht_num,
     base_off[i] = i * pb->tuple_size;
   }
 #if MEMOUTPUT
-  __attribute__((aligned(32))) uint32_t output_buffer[output_buffer_size];
+  __attribute__((aligned(64))) uint32_t output_buffer[output_buffer_size];
 #endif
-  __attribute__((aligned(32))) uint64_t htp[8] = {0};
-  __attribute__((aligned(32))) void * *ht_addr, **ht_addr4, *tmp_ht_addr[8];
+  __attribute__((aligned(64))) uint64_t htp[8] = {0};
+  __attribute__((aligned(64))) void * *ht_addr, **ht_addr4, *tmp_ht_addr[8];
   for (int i = tuple_scale; i < 16; ++i) {
     mask[i] = -1;
   }
@@ -711,7 +684,7 @@ uint64_t LinearSIMDProbeHor(Table* pb, HashTable** ht, int ht_num,
       v_buckets_minus_1 = _mm256_set1_epi32(0), v_base_offset, v_offset,
       v_addr_offset, v_10mask = _mm256_set_epi32(0, -1, 0, -1, 0, -1, 0, -1);
   const uint32_t offset_index = 0x76543210, tuple_scale = 8;
-  __attribute__((aligned(32))) int32_t base_off[10], *ht_pos, *join_id,
+  __attribute__((aligned(64))) int32_t base_off[10], *ht_pos, *join_id,
       *tuple_cell, *addr_offset, *done, *have_tuple, *offset,
       tuple_cell_offset[10] = {0}, left_size[8] = {0}, ht_cell_offset[8] = {0},
       buckets_minus_1[8] = {0}, mask[16] = {0}, shift[8] = {0}, tmp_cell[8];
@@ -719,10 +692,10 @@ uint64_t LinearSIMDProbeHor(Table* pb, HashTable** ht, int ht_num,
     base_off[i] = i * pb->tuple_size;
   }
 #if MEMOUTPUT
-  __attribute__((aligned(32))) uint32_t output_buffer[output_buffer_size];
+  __attribute__((aligned(64))) uint32_t output_buffer[output_buffer_size];
 #endif
-  __attribute__((aligned(32))) uint64_t htp[8] = {0}, bucket_upper[8] = {0};
-  __attribute__((aligned(32))) void * *ht_addr, **ht_addr4, *tmp_ht_addr[8];
+  __attribute__((aligned(64))) uint64_t htp[8] = {0}, bucket_upper[8] = {0};
+  __attribute__((aligned(64))) void * *ht_addr, **ht_addr4, *tmp_ht_addr[8];
   for (int i = tuple_scale; i < 16; ++i) {
     mask[i] = -1;
   }
@@ -941,15 +914,15 @@ uint64_t SIMDProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
       v_have_tuple = _mm256_set1_epi32(0), zero256 = _mm256_set1_epi32(0),
       v_join_id = _mm256_set1_epi32(0), v_base_offset, v_offset, v_addr_offset;
   const uint32_t offset_index = 0x76543210, tuple_scale = 8;
-  __attribute__((aligned(32))) int32_t base_off[10], *ht_pos, *join_id,
+  __attribute__((aligned(64))) int32_t base_off[10], *ht_pos, *join_id,
       *tuple_cell, *addr_offset, *done, *have_tuple, *offset,
       tuple_cell_offset[10] = {0}, left_size[8] = {0}, ht_cell_offset[8] = {0},
       mask[16] = {0};
   for (int i = 0; i <= tuple_scale; ++i) {
     base_off[i] = i * pb->tuple_size;
   }
-  __attribute__((aligned(32))) uint64_t htp[8] = {0};
-  __attribute__((aligned(32))) void * *ht_addr, **ht_addr4;
+  __attribute__((aligned(64))) uint64_t htp[8] = {0};
+  __attribute__((aligned(64))) void * *ht_addr, **ht_addr4;
   for (int i = tuple_scale; i < 16; ++i) {
     mask[i] = -1;
   }
