@@ -41,7 +41,7 @@ typedef unsigned short uint16_t;
 #define PREFETCH 1
 #define EARLYBREAK 1
 // filter out
-float selectity = 0.99;
+float selectity = 0.9;
 #define INVALID 2147483647
 #define up64(a) (a - (a % 64) + 64)
 struct Table {

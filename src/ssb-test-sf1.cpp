@@ -10,20 +10,9 @@
 int SsbTestSf1(int argc, char** argv) {
   cout << "----------------SSB=1-------------------" << endl;
   struct timeval t1, t2;
-  if (argc > 1) {
-    times = atoi(argv[1]);
-  }
-  if (argc > 2) {
-    thread_num = atoi(argv[2]);
-  }
   int deltaT = 0;
   gettimeofday(&t1, NULL);
-  table_factor = (rand() << 1) | 1;
-  // cout << "table_factor = " << table_factor << endl;
-  table_factor = (rand() << 1) | 1;
-#if DEBUGINFO
   cout << "table_factor = " << table_factor << endl;
-#endif
 
   Table dim_date;
   dim_date.name = "dim_date";
