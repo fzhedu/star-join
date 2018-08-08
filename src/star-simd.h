@@ -37,11 +37,11 @@ typedef unsigned short uint16_t;
 #define OUTPUT 0
 #define GATHERHT 1
 // if adopt global address
-#define PAYLOADSIZE 4
+#define PAYLOADSIZE 8
 #define PREFETCH 1
 #define EARLYBREAK 1
 // filter out
-float selectity = 0.9;
+float selectity = 0.99;
 #define INVALID 2147483647
 #define up64(a) (a - (a % 64) + 64)
 struct Table {
@@ -351,7 +351,7 @@ uint64_t TupleAtATimeProbe(Table* pb, HashTable** ht, int ht_num,
   int ret_size, len = 128;
   char* res;
   uint64_t num = 0;
-  uint32_t cur_payloads = 0, result_size = PAYLOADSIZE * 5;
+  uint32_t cur_payloads = 0, result_size = PAYLOADSIZE * (ht_num + 1);
 
   char output[8][PAYLOADSIZE * 5];
 

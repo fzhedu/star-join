@@ -25,10 +25,10 @@ int main(int argc, char** argv) {
 
   // TpcdsTest(argc, argv);
   // TpchTest(argc, argv);
-  SsbTestSf100(argc, argv);
-  SsbTestSf50(argc, argv);
+  // SsbTestSf100(argc, argv);
+  // SsbTestSf50(argc, argv);
   SsbTestSf10(argc, argv);
-  SsbTestSf1(argc, argv);
+  // SsbTestSf1(argc, argv);
   // SsbTestSf2(argc, argv);
 
   return 0;

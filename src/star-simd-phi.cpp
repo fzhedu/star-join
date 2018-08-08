@@ -89,7 +89,7 @@ uint64_t Linear512Probe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
 
 ////// step 3: load new values in hash tables
 
-#if 0
+#if 1
     v_left_size = _mm512_i32gather_epi32(v_join_id, left_size, 4);
     v_ht_cell_offset = _mm512_i32gather_epi32(v_join_id, ht_cell_offset, 4);
 #endif
@@ -214,8 +214,8 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
            hor_probe_step = 16 * ht[0]->tuple_size, left_size[16] = {0},
            ht_cell_offset[16] = {0}, tuple_off[16] = {0}, *payloads_off,
            result_size = (ht_num + 1) * PAYLOADSIZE, buckets_minus_1[16] = {0},
-           shift[16] = {0}, h_buf[16] = {0};
-  __attribute__((aligned(64))) uint64_t htp[16] = {0}, bucket_upper[16] = {0};
+           shift[16] = {0}, h_buf[16] = {0}, bucket_upper[16] = {0};
+  __attribute__((aligned(64))) uint64_t htp[16] = {0};
 
   for (int i = 0; i <= vector_scale; ++i) {
     base_off[i] = i * pb->tuple_size;
@@ -227,7 +227,7 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
     shift[i] = ht[i]->shift;
     buckets_minus_1[i] = ht[i]->slot_num - 1;
     htp[i] = (uint64_t)ht[i]->addr;
-    bucket_upper[i] = buckets_minus_1[i] * left_size[i];
+    bucket_upper[i] = ht[i]->slot_num * left_size[i];
     global_addr_offset[i] = ht[i]->global_addr_offset;
   }
   for (int i = 0; i < vector_scale; ++i) {
@@ -283,7 +283,7 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
         _mm512_add_epi32(v_addr_offset, v_right_index), pb->start, 1);
 
 ////// step 3: load new values in hash tables
-#if 0
+#if 1
     v_left_size =
         _mm512_i32gather_epi32(v_join_id, left_size, 4);  /////////////
     v_ht_cell_offset =
@@ -331,7 +331,7 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
             _mm512_i32gather_epi32(v_payloads_off, ht[0]->global_addr, 1);
         __mmask16 out = _mm512_cmpeq_epi32_mask(tab, key_x16);
         if (out > 0) {
-          int znum = _tzcnt_u32(out);
+          int znum = zero_count(out);
           payloads_addr[j][join_id[j]] = (payloads_off[znum] + WORDSIZE);
           flag = 1;
           break;

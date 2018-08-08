@@ -85,13 +85,10 @@ uint64_t Linear512Probe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
         v_tuple_cell, m_new_cells,
         _mm512_add_epi32(v_addr_offset, v_right_index), pb->start, 1);
 
-////// step 3: load new values in hash tables
-#if 0
-    v_left_size =
-        _mm512_i32gather_epi32(v_join_id, left_size, 4);
-    v_ht_cell_offset =
-        _mm512_i32gather_epi32(v_join_id, ht_cell_offset, 4);
-#endif
+    ////// step 3: load new values in hash tables
+    v_left_size = _mm512_i32gather_epi32(v_join_id, left_size, 4);
+    // v_ht_cell_offset = _mm512_i32gather_epi32(v_join_id, ht_cell_offset, 4);
+
     v_shift = _mm512_i32gather_epi32(v_join_id, shift, 4);
     v_buckets_minus_1 = _mm512_i32gather_epi32(v_join_id, buckets_minus_1, 4);
     // hash the cell values
@@ -208,8 +205,8 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
            hor_probe_step = 16 * ht[0]->tuple_size, left_size[16] = {0},
            ht_cell_offset[16] = {0}, tuple_off[16] = {0}, *payloads_off,
            result_size = (ht_num + 1) * PAYLOADSIZE, buckets_minus_1[16] = {0},
-           shift[16] = {0}, h_buf[16] = {0};
-  __attribute__((aligned(64))) uint64_t htp[16] = {0}, bucket_upper[16] = {0};
+           shift[16] = {0}, h_buf[16] = {0}, bucket_upper[16] = {0};
+  __attribute__((aligned(64))) uint64_t htp[16] = {0};
 
   for (int i = 0; i <= vector_scale; ++i) {
     base_off[i] = i * pb->tuple_size;
@@ -267,23 +264,19 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
      * v_next_cells
      */
 
-    v_right_index =
-        _mm512_i32gather_epi32(v_join_id, tuple_cell_offset, 4);  ///////
+    v_right_index = _mm512_i32gather_epi32(v_join_id, tuple_cell_offset, 4);
     m_new_cells = _mm512_kand(m_new_cells, m_have_tuple);
     v_tuple_cell = _mm512_mask_i32gather_epi32(
         v_tuple_cell, m_new_cells,
         _mm512_add_epi32(v_addr_offset, v_right_index), pb->start, 1);
 
-////// step 3: load new values in hash tables
-#if 0
-    v_left_size =
-        _mm512_i32gather_epi32(v_join_id, left_size, 4);  /////////////
-    v_ht_cell_offset =
-        _mm512_i32gather_epi32(v_join_id, ht_cell_offset, 4);  /////
-#endif
-    v_shift = _mm512_i32gather_epi32(v_join_id, shift, 4);  ////////////////////
-    v_buckets_minus_1 =
-        _mm512_i32gather_epi32(v_join_id, buckets_minus_1, 4);  ////
+    ////// step 3: load new values in hash tables
+
+    v_left_size = _mm512_i32gather_epi32(v_join_id, left_size, 4);
+    // v_ht_cell_offset = _mm512_i32gather_epi32(v_join_id, ht_cell_offset, 4);
+
+    v_shift = _mm512_i32gather_epi32(v_join_id, shift, 4);
+    v_buckets_minus_1 = _mm512_i32gather_epi32(v_join_id, buckets_minus_1, 4);
     // hash the cell values
     v_cell_hash = _mm512_mullo_epi32(v_tuple_cell, v_factor);
     v_cell_hash = _mm512_srlv_epi32(v_cell_hash, v_shift);
