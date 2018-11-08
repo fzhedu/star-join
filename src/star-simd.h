@@ -30,18 +30,23 @@ typedef unsigned long long uint64_t;
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
 #endif
-#define DEBUGINFO 0
+#define DEBUGINFO 1
 #define NULL_INT 2147483647
 #define BLOCK_SIZE 65536
 #define RESULTS 1
 #define OUTPUT 0
 #define GATHERHT 1
 // if adopt global address
-#define PAYLOADSIZE 8
-#define PREFETCH 1
+#define PAYLOADSIZE 4
+// for random access
+#define PREFETCH 0
+// for sequencal access
+#define SEQPREFETCH 0
+// +64
+#define PDIS 384
 #define EARLYBREAK 1
 // filter out
-float selectity = 0.99;
+float selectity = 0.1;
 #define INVALID 2147483647
 #define up64(a) (a - (a % 64) + 64)
 struct Table {
@@ -79,8 +84,8 @@ typedef unsigned int uint32_t;
 pthread_mutex_t mutex;
 uint64_t global_probe_corsur = 0, global_matched = 0;
 #define probe_step 1024 * 1024  // 1048576
-int thread_num = 2;
-int ht_num = 4;
+int thread_num = 1;
+int ht_num = 1;
 int times = 1;
 // typedef unsigned long long uint64_t;
 
@@ -240,6 +245,9 @@ uint64_t LinearHandProbe(Table* pb, HashTable** ht, int ht_num,
        pb_off += pb->tuple_size) {
     tmp = true;
     probe_tuple_start = (pb->start + pb_off);
+#if SEQPREFETCH
+    _mm_prefetch((char*)(probe_tuple_start + PDIS), _MM_HINT_T0);
+#endif
     for (int j = 0; j < ht_num && tmp; ++j) {
       tuple_key[j] = *(uint32_t*)(probe_tuple_start + ht[j]->probe_offset);
       hash = ((uint32_t)(tuple_key[j] * table_factor)) >> ht[j]->shift;
@@ -367,9 +375,11 @@ uint64_t TupleAtATimeProbe(Table* pb, HashTable** ht, int ht_num,
 #endif
   for (uint64_t i = 0, off = 0; i < pb->tuple_num; ++i, off += pb->tuple_size) {
     ret_size = 0;
-    //    res = ProbeTuple(pb->start + off, pb->tuple_size, ht, ht_num, 0,
-    //    ret_size,output);
-
+//    res = ProbeTuple(pb->start + off, pb->tuple_size, ht, ht_num, 0,
+//    ret_size,output);
+#if SEQPREFETCH
+    _mm_prefetch((char*)(pb->start + off + PDIS), _MM_HINT_T0);
+#endif
     res = LinearProbeTuple(pb->start + off, pb->tuple_size - WORDSIZE, ht,
                            ht_num, ht_num - 1, ret_size, output);
     if (res) {

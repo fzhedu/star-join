@@ -60,9 +60,16 @@ uint64_t Linear512Probe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
   }
 #endif
   for (uint64_t cur = 0; cur < pb->tuple_num || m_have_tuple;) {
-    ///////// step 1: load new tuples' address offsets
-    // the offset should be within MAX_32INT_
-    // the tail depends on the number of joins and tuples in each bucket
+///////// step 1: load new tuples' address offsets
+// the offset should be within MAX_32INT_
+// the tail depends on the number of joins and tuples in each bucket
+#if SEQPREFETCH
+    _mm_prefetch((char*)(pb->start + cur_offset + PDIS), _MM_HINT_T0);
+    _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 64), _MM_HINT_T0);
+    _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 128), _MM_HINT_T0);
+    _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 192), _MM_HINT_T0);
+    _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 256), _MM_HINT_T0);
+#endif
     v_offset = _mm512_add_epi32(_mm512_set1_epi32(cur_offset), v_base_offset);
     v_addr_offset = _mm512_mask_expand_epi32(
         v_addr_offset, _mm512_knot(m_have_tuple), v_offset);
@@ -245,9 +252,16 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
 #endif
   int times = 0;
   for (uint64_t cur = 0; cur < pb->tuple_num || m_have_tuple;) {
-    ///////// step 1: load new tuples' address offsets
-    // the offset should be within MAX_32INT_
-    // the tail depends on the number of joins and tuples in each bucket
+///////// step 1: load new tuples' address offsets
+// the offset should be within MAX_32INT_
+// the tail depends on the number of joins and tuples in each bucket
+#if SEQPREFETCH
+    _mm_prefetch((char*)(pb->start + cur_offset + PDIS), _MM_HINT_T0);
+    _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 64), _MM_HINT_T0);
+    _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 128), _MM_HINT_T0);
+    _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 192), _MM_HINT_T0);
+    _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 256), _MM_HINT_T0);
+#endif
     v_offset = _mm512_add_epi32(_mm512_set1_epi32(cur_offset), v_base_offset);
     v_addr_offset = _mm512_mask_expand_epi32(
         v_addr_offset, _mm512_knot(m_have_tuple), v_offset);
@@ -300,7 +314,7 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
       _mm_prefetch((char*)(ht_pos[j] + ht[0]->global_addr), _MM_HINT_T0);
     }
 #endif
-    // probe buckets horizationally for each key
+    // probe buckets horizontally for each key
     for (int j = 0; j != 16; ++j) {
       if (((m_have_tuple >> j) & 1) == 0) {
         continue;
@@ -310,6 +324,12 @@ uint64_t Linear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
       short flag = 0;
       // pay attention to hor_probe_step
       for (;;) {
+#if SEQPREFETCH
+        _mm_prefetch((char*)(ht[0]->global_addr + global_off + PDIS),
+                     _MM_HINT_T0);
+        _mm_prefetch((char*)(ht[0]->global_addr + global_off + PDIS + 64),
+                     _MM_HINT_T0);
+#endif
         v_payloads_off =
             _mm512_add_epi32(_mm512_set1_epi32(global_off), v_tuple_off);
         // avoid overflow
