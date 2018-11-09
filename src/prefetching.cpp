@@ -1,7 +1,9 @@
 #include "star-simd.h"
 #include <stdlib.h>
-#define StateSize 16
+// 128 for multi-stage
+#define StateSize 24
 #define Step 6
+#define MultiPrefetch 0
 struct State {
   uint32_t key;
   uint32_t pb_off;
@@ -33,13 +35,23 @@ uint64_t AMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
         state[k].key = *(uint32_t*)(pb->start + pb_off + ht[j]->probe_offset);
         hash = ((uint32_t)(state[k].key * table_factor)) >> ht[j]->shift;
         state[k].ht_off = hash * ht[j]->tuple_size;
-        // prefetch
-        _mm_prefetch((char*)(ht[j]->addr + state[k].ht_off), _MM_HINT_T1);
+// prefetch
+#if MultiPrefetch
+        _mm_prefetch((char*)(ht[j]->addr + state[k].ht_off), _MM_HINT_T2);
+#else
+        _mm_prefetch((char*)(ht[j]->addr + state[k].ht_off), _MM_HINT_T0);
+#endif
         state[k].pb_off = pb_off;
         state[k].stage = 0;
         pb_off += pb->tuple_size;
       } break;
       case 0: {
+#if MultiPrefetch
+        if (k + Step < StateSize) {
+          _mm_prefetch((char*)(ht[j]->addr + state[k + Step].ht_off),
+                       _MM_HINT_T0);
+        }
+#endif
         ht_off = state[k].ht_off;
         while (*(int*)(ht[j]->addr + ht_off + ht[j]->key_offset) != -1) {
           if (state[k].key ==
@@ -94,13 +106,23 @@ uint64_t GPProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
       state[k].key = *(uint32_t*)(pb->start + pb_off + ht[j]->probe_offset);
       hash = ((uint32_t)(state[k].key * table_factor)) >> ht[j]->shift;
       state[k].ht_off = hash * ht[j]->tuple_size;
-      // prefetch
+// prefetch
+#if MultiPrefetch
+      _mm_prefetch((char*)(ht[j]->addr + state[k].ht_off), _MM_HINT_T2);
+#else
       _mm_prefetch((char*)(ht[j]->addr + state[k].ht_off), _MM_HINT_T0);
+#endif
       state[k].pb_off = pb_off;
       state[k].stage = 0;
       pb_off += pb->tuple_size;
     }
     for (int kk = 0; (kk < k); ++kk) {
+#if MultiPrefetch
+      if (kk + Step < k) {
+        _mm_prefetch((char*)(ht[j]->addr + state[kk + Step].ht_off),
+                     _MM_HINT_T0);
+      }
+#endif
       ht_off = state[kk].ht_off;
       while (*(int*)(ht[j]->addr + ht_off + ht[j]->key_offset) != -1) {
         if (state[kk].key ==

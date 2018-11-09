@@ -75,7 +75,7 @@ int PrefetchingTest(int argc, char** argv) {
   SetVectorValue(array99, 5, lineitem.size);
   lineitem.tuple_size = SumOfVector(lineitem.size);
   tb[3] = &lineitem;
-  read_data_in_memory(&lineitem, 20);
+  read_data_in_memory(&lineitem, 10);
   // test(&lineitem, lineitem.start, 0);
   gettimeofday(&t2, NULL);
   deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
