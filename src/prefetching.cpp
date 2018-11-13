@@ -2,10 +2,10 @@
 #include <stdlib.h>
 // 128 for multi-stage
 #define StateSize 30
-#define SIMDStateSize 28
+#define SIMDStateSize 3
 
 #define Step 2
-#define MultiPrefetch 1
+#define MultiPrefetch 0
 struct State {
   uint32_t key;
   uint32_t pb_off;
@@ -16,7 +16,6 @@ struct StateSIMD {
   __m512i key;
   __m512i pb_off;
   __m512i ht_off;
-  __m512i bkt_off;
   __mmask16 m_have_tuple;
   char stage;
 };
@@ -30,9 +29,9 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
               _mm512_set1_epi32(pb->tuple_num * pb->tuple_size),
           v_tuple_cell = _mm512_set1_epi32(0), v_base_offset,
           v_left_size = _mm512_set1_epi32(8), ht_cell,
-          v_factor = _mm512_set1_epi32(table_factor), v_shift,
-          v_buckets_minus_1, v_cell_hash, v_ht_pos,
-          v_neg_one512 = _mm512_set1_epi32(-1),
+          v_ht_upper = _mm512_set1_epi32(ht[0]->slot_num * ht[0]->tuple_size),
+          v_factor = _mm512_set1_epi32(table_factor), v_shift, v_cell_hash,
+          v_ht_pos, v_neg_one512 = _mm512_set1_epi32(-1),
           v_zero512 = _mm512_set1_epi32(0), v_one = _mm512_set1_epi32(1),
           v_word_size = _mm512_set1_epi32(WORDSIZE);
   __attribute__((aligned(64))) uint32_t cur_offset = 0, cur_payloads = 0,
@@ -43,18 +42,15 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
   v_base_offset = _mm512_load_epi32(base_off);
   v_left_size = _mm512_set1_epi32(ht[0]->tuple_size);
   v_shift = _mm512_set1_epi32(ht[0]->shift);
-  v_buckets_minus_1 = _mm512_set1_epi32(ht[0]->slot_num - 1);
-  ht_pos = (uint32_t*)&v_ht_pos;
 
   StateSIMD state[SIMDStateSize];
   // init # of the state
   for (int i = 0; i < SIMDStateSize; ++i) {
     state[i].stage = 1;
     state[i].m_have_tuple = 0;
-    state[i].bkt_off = _mm512_set1_epi32(0);
+    state[i].ht_off = _mm512_set1_epi32(0);
     // state[i].pb_off = _mm512_set1_epi32(0);
     // state[i].key = _mm512_set1_epi32(0);
-    // state[i].ht_off = _mm512_set1_epi32(0);
   }
   for (uint64_t cur = 0; (cur < pb->tuple_num) || (done < SIMDStateSize);) {
     k = (k >= SIMDStateSize) ? 0 : k;
@@ -98,15 +94,18 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
         // hash the cell values
         v_cell_hash = _mm512_mullo_epi32(state[k].key, v_factor);
         v_cell_hash = _mm512_srlv_epi32(v_cell_hash, v_shift);
-        // set 0 for new cells, but add 1 for old cells
-        state[k].bkt_off = _mm512_maskz_add_epi32(_mm512_knot(m_new_cells),
-                                                  state[k].bkt_off, v_one);
 
-        v_cell_hash = _mm512_add_epi32(v_cell_hash, state[k].bkt_off);
-        // avoid overflow
-        v_cell_hash = _mm512_and_si512(v_cell_hash, v_buckets_minus_1);
-
-        state[k].ht_off = _mm512_mullo_epi32(v_cell_hash, v_left_size);
+        // new hash
+        v_cell_hash = _mm512_mullo_epi32(v_cell_hash, v_left_size);
+        // old_hash = old_hash+left_size
+        state[k].ht_off = _mm512_add_epi32(state[k].ht_off, v_left_size);
+        // old_hash = old_hash >= upper ? 0 : old_hash;
+        state[k].ht_off = _mm512_maskz_mov_epi32(
+            _mm512_cmplt_epi32_mask(state[k].ht_off, v_ht_upper),
+            state[k].ht_off);
+        // combine new hash value with old hash value
+        state[k].ht_off =
+            _mm512_mask_mov_epi32(state[k].ht_off, m_new_cells, v_cell_hash);
         state[k].stage = 0;
 #if MultiPrefetch
         ht_pos = (uint32_t*)&state[k].ht_off;
@@ -121,7 +120,7 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
 #endif
       } break;
       case 0: {
-#if !MultiPrefetch
+#if MultiPrefetch
         if (k + Step < SIMDStateSize) {
           ht_pos = (uint32_t*)&state[k + Step].ht_off;
           for (int i = 0; i < vector_scale; ++i) {
@@ -194,8 +193,8 @@ uint64_t SIMDGPProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
               _mm512_set1_epi32(pb->tuple_num * pb->tuple_size),
           v_tuple_cell = _mm512_set1_epi32(0), v_base_offset,
           v_left_size = _mm512_set1_epi32(8), ht_cell,
-          v_factor = _mm512_set1_epi32(table_factor), v_shift,
-          v_buckets_minus_1, v_cell_hash, v_ht_pos,
+          v_ht_upper = _mm512_set1_epi32(ht[0]->slot_num * ht[0]->tuple_size),
+          v_factor = _mm512_set1_epi32(table_factor), v_shift, v_cell_hash,
           v_neg_one512 = _mm512_set1_epi32(-1),
           v_zero512 = _mm512_set1_epi32(0), v_one = _mm512_set1_epi32(1),
           v_word_size = _mm512_set1_epi32(WORDSIZE);
@@ -207,19 +206,15 @@ uint64_t SIMDGPProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
   v_base_offset = _mm512_load_epi32(base_off);
   v_left_size = _mm512_set1_epi32(ht[0]->tuple_size);
   v_shift = _mm512_set1_epi32(ht[0]->shift);
-  v_buckets_minus_1 = _mm512_set1_epi32(ht[0]->slot_num - 1);
-  ht_pos = (uint32_t*)&v_ht_pos;
-  addr_offset = (uint32_t*)&v_addr_offset;
 
   StateSIMD state[SIMDStateSize];
   // init # of the state
   for (int i = 0; i < SIMDStateSize; ++i) {
     state[i].stage = 1;
     state[i].m_have_tuple = 0;
-    state[i].bkt_off = _mm512_set1_epi32(0);
+    state[i].ht_off = _mm512_set1_epi32(0);
     // state[i].pb_off = _mm512_set1_epi32(0);
     // state[i].key = _mm512_set1_epi32(0);
-    // state[i].ht_off = _mm512_set1_epi32(0);
   }
   for (uint64_t cur = 0; (done < SIMDStateSize);) {
     for (k = 0; k < SIMDStateSize; ++k) {  // init state for each tuple
@@ -260,15 +255,19 @@ uint64_t SIMDGPProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
       // hash the cell values
       v_cell_hash = _mm512_mullo_epi32(state[k].key, v_factor);
       v_cell_hash = _mm512_srlv_epi32(v_cell_hash, v_shift);
-      // set 0 for new cells, but add 1 for old cells
-      state[k].bkt_off = _mm512_maskz_add_epi32(_mm512_knot(m_new_cells),
-                                                state[k].bkt_off, v_one);
 
-      v_cell_hash = _mm512_add_epi32(v_cell_hash, state[k].bkt_off);
-      // avoid overflow
-      v_cell_hash = _mm512_and_si512(v_cell_hash, v_buckets_minus_1);
+      // new hash
+      v_cell_hash = _mm512_mullo_epi32(v_cell_hash, v_left_size);
+      // old_hash = old_hash+left_size
+      state[k].ht_off = _mm512_add_epi32(state[k].ht_off, v_left_size);
+      // old_hash = old_hash >= upper ? 0 : old_hash;
+      state[k].ht_off = _mm512_maskz_mov_epi32(
+          _mm512_cmplt_epi32_mask(state[k].ht_off, v_ht_upper),
+          state[k].ht_off);
+      // combine new hash value with old hash value
+      state[k].ht_off =
+          _mm512_mask_mov_epi32(state[k].ht_off, m_new_cells, v_cell_hash);
 
-      state[k].ht_off = _mm512_mullo_epi32(v_cell_hash, v_left_size);
 //  state[k].stage = 0;
 #if MultiPrefetch
       ht_pos = (uint32_t*)&state[k].ht_off;
@@ -283,7 +282,7 @@ uint64_t SIMDGPProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
 #endif
     }
     for (k = 0; (k < SIMDStateSize); ++k) {
-#if !MultiPrefetch
+#if MultiPrefetch
       if (k + Step < SIMDStateSize) {
         ht_pos = (uint32_t*)&state[k + Step].ht_off;
         for (int i = 0; i < vector_scale; ++i) {
