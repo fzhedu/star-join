@@ -1,7 +1,7 @@
 #include "star-simd.h"
 #include <stdlib.h>
 // 128 for multi-stage
-#define StateSize 30
+#define StateSize 20
 #define SIMDStateSize 3
 
 #define Step 2
@@ -128,6 +128,7 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
           }
         }
 #endif
+#if RESULTS1
         ht_cell =
             _mm512_mask_i32gather_epi32(v_neg_one512, state[k].m_have_tuple,
                                         state[k].ht_off, ht[0]->global_addr, 1);
@@ -137,14 +138,11 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
         m_match = _mm512_kand(m_match, state[k].m_have_tuple);
         equal_num += _mm_popcnt_u32(m_match);
         m_new_cells = _mm512_cmpeq_epi32_mask(ht_cell, v_neg_one512);
-#if EARLYBREAK
         m_new_cells = _mm512_kor(m_new_cells, m_match);
-#endif
         state[k].m_have_tuple =
             _mm512_kandn(m_new_cells, state[k].m_have_tuple);
 
-///// step 5: generate results;
-#if RESULTS
+        ///// step 5: generate results;
         addr_offset = (uint32_t*)&state[k].pb_off;
         ht_pos = (uint32_t*)&state[k].ht_off;
 
@@ -159,9 +157,32 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
           }
         }
         state[k].stage = 1;
-#else
-        if (_mm_popcnt_u32(state[k].m_have_tuple) > 0) {
+#elif 1
+        ht_cell =
+            _mm512_mask_i32gather_epi32(v_neg_one512, state[k].m_have_tuple,
+                                        state[k].ht_off, ht[0]->global_addr, 1);
+        ///// step 4: compare;
+        m_match = _mm512_cmpeq_epi32_mask(state[k].key, ht_cell);
+        // m_match = _mm512_kand(m_match, state[k].m_have_tuple);
+        m_new_cells = _mm512_cmpeq_epi32_mask(ht_cell, v_neg_one512);
+        m_new_cells = _mm512_kor(m_new_cells, m_match);
+        m_new_cells = _mm512_kand(m_new_cells, state[k].m_have_tuple);
+        if (m_new_cells != state[k].m_have_tuple) {
+          // old_hash = old_hash+left_size,
+          state[k].ht_off =
+              _mm512_mask_add_epi32(state[k].ht_off, _mm512_knot(m_new_cells),
+                                    state[k].ht_off, v_left_size);
+          // old_hash = old_hash >= upper ? 0 : old_hash;
+          state[k].ht_off = _mm512_maskz_mov_epi32(
+              _mm512_cmplt_epi32_mask(state[k].ht_off, v_ht_upper),
+              state[k].ht_off);
+          state[k].stage = 0;
+
         } else {
+          equal_num += _mm_popcnt_u32(m_match);
+          state[k].m_have_tuple =
+              _mm512_kandn(m_new_cells, state[k].m_have_tuple);
+          state[k].stage = 1;
           addr_offset = (uint32_t*)&state[k].pb_off;
           ht_pos = (uint32_t*)&state[k].ht_off;
 
@@ -175,8 +196,47 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
               // cur_payloads += PAYLOADSIZE + PAYLOADSIZE;
             }
           }
-          state[k].stage = 1;
         }
+#else
+        m_new_cells = 0;
+        while (m_new_cells != state[k].m_have_tuple) {
+          ht_cell = _mm512_mask_i32gather_epi32(
+              v_neg_one512, state[k].m_have_tuple, state[k].ht_off,
+              ht[0]->global_addr, 1);
+          ///// step 4: compare;
+          m_match = _mm512_cmpeq_epi32_mask(state[k].key, ht_cell);
+          // m_match = _mm512_kand(m_match, state[k].m_have_tuple);
+          m_new_cells = _mm512_cmpeq_epi32_mask(ht_cell, v_neg_one512);
+          m_new_cells = _mm512_kor(m_new_cells, m_match);
+          m_new_cells = _mm512_kand(m_new_cells, state[k].m_have_tuple);
+
+          // old_hash = old_hash+left_size,
+          state[k].ht_off =
+              _mm512_mask_add_epi32(state[k].ht_off, _mm512_knot(m_new_cells),
+                                    state[k].ht_off, v_left_size);
+          // old_hash = old_hash >= upper ? 0 : old_hash;
+          state[k].ht_off = _mm512_maskz_mov_epi32(
+              _mm512_cmplt_epi32_mask(state[k].ht_off, v_ht_upper),
+              state[k].ht_off);
+        }
+        equal_num += _mm_popcnt_u32(m_match);
+        state[k].m_have_tuple =
+            _mm512_kandn(m_new_cells, state[k].m_have_tuple);
+        addr_offset = (uint32_t*)&state[k].pb_off;
+        ht_pos = (uint32_t*)&state[k].ht_off;
+
+        for (int i = 0; (i < vector_scale) && m_match;
+             ++i, m_match = (m_match >> 1)) {
+          if (m_match & 1) {
+            memcpy(payloads + cur_payloads,
+                   ht[0]->global_addr + ht_pos[i] + WORDSIZE, PAYLOADSIZE);
+            memcpy(payloads + cur_payloads + PAYLOADSIZE,
+                   pb->start + addr_offset[i] + WORDSIZE, PAYLOADSIZE);
+            // cur_payloads += PAYLOADSIZE + PAYLOADSIZE;
+          }
+        }
+        state[k].stage = 1;
+
 #endif
       } break;
     }
@@ -293,6 +353,7 @@ uint64_t SIMDGPProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
       if (state[k].m_have_tuple == 0) {
         continue;
       }
+#if RESULTS1
       ht_cell =
           _mm512_mask_i32gather_epi32(v_neg_one512, state[k].m_have_tuple,
                                       state[k].ht_off, ht[0]->global_addr, 1);
@@ -302,13 +363,10 @@ uint64_t SIMDGPProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
       m_match = _mm512_kand(m_match, state[k].m_have_tuple);
       equal_num += _mm_popcnt_u32(m_match);
       m_new_cells = _mm512_cmpeq_epi32_mask(ht_cell, v_neg_one512);
-#if EARLYBREAK
       m_new_cells = _mm512_kor(m_new_cells, m_match);
-#endif
       state[k].m_have_tuple = _mm512_kandn(m_new_cells, state[k].m_have_tuple);
 
-///// step 5: generate results;
-#if RESULTS
+      ///// step 5: generate results;
       addr_offset = (uint32_t*)&state[k].pb_off;
       for (int i = 0; (i < vector_scale) && m_match;
            ++i, m_match = (m_match >> 1)) {
@@ -320,6 +378,44 @@ uint64_t SIMDGPProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
           // cur_payloads += PAYLOADSIZE + PAYLOADSIZE;
         }
       }
+#else
+      m_new_cells = 0;
+      while (m_new_cells != state[k].m_have_tuple) {
+        ht_cell =
+            _mm512_mask_i32gather_epi32(v_neg_one512, state[k].m_have_tuple,
+                                        state[k].ht_off, ht[0]->global_addr, 1);
+        ///// step 4: compare;
+        m_match = _mm512_cmpeq_epi32_mask(state[k].key, ht_cell);
+        // m_match = _mm512_kand(m_match, state[k].m_have_tuple);
+        m_new_cells = _mm512_cmpeq_epi32_mask(ht_cell, v_neg_one512);
+        m_new_cells = _mm512_kor(m_new_cells, m_match);
+        m_new_cells = _mm512_kand(m_new_cells, state[k].m_have_tuple);
+
+        // old_hash = old_hash+left_size,
+        state[k].ht_off =
+            _mm512_mask_add_epi32(state[k].ht_off, _mm512_knot(m_new_cells),
+                                  state[k].ht_off, v_left_size);
+        // old_hash = old_hash >= upper ? 0 : old_hash;
+        state[k].ht_off = _mm512_maskz_mov_epi32(
+            _mm512_cmplt_epi32_mask(state[k].ht_off, v_ht_upper),
+            state[k].ht_off);
+      }
+      equal_num += _mm_popcnt_u32(m_match);
+      state[k].m_have_tuple = _mm512_kandn(m_new_cells, state[k].m_have_tuple);
+      addr_offset = (uint32_t*)&state[k].pb_off;
+      ht_pos = (uint32_t*)&state[k].ht_off;
+
+      for (int i = 0; (i < vector_scale) && m_match;
+           ++i, m_match = (m_match >> 1)) {
+        if (m_match & 1) {
+          memcpy(payloads + cur_payloads,
+                 ht[0]->global_addr + ht_pos[i] + WORDSIZE, PAYLOADSIZE);
+          memcpy(payloads + cur_payloads + PAYLOADSIZE,
+                 pb->start + addr_offset[i] + WORDSIZE, PAYLOADSIZE);
+          // cur_payloads += PAYLOADSIZE + PAYLOADSIZE;
+        }
+      }
+
 #endif
       // state[k].stage = 1;
     }
