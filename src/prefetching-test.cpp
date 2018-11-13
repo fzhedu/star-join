@@ -2,6 +2,8 @@
 #define __PREFETCHINGTEST__
 #include "star-simd.h"
 #include "prefetching.cpp"
+
+#include "single-probe-simd.cpp"
 int PrefetchingTest(int argc, char** argv) {
   struct timeval t1, t2;
   int times = 3;
@@ -126,6 +128,12 @@ int PrefetchingTest(int argc, char** argv) {
       TestSet(&lineitem, "AMACProbe", times, AMACProbe, thread_num);
     } else if (id == 1) {
       TestSet(&lineitem, "GPProbe", times, GPProbe, thread_num);
+    } else if (id == 2) {
+      TestSet(&lineitem, "SIMDSingleProbe", times, SIMDSingleProbe, thread_num);
+    } else if (id == 3) {
+      TestSet(&lineitem, "SIMDAMACProbe", times, SIMDAMACProbe, thread_num);
+    } else if (id == 4) {
+      TestSet(&lineitem, "SIMDGPProbe", times, SIMDGPProbe, thread_num);
     } else {
       TestSet(&lineitem, "SingleProbe", times, SingleProbe, thread_num);
     }
