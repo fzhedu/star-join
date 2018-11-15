@@ -1,11 +1,12 @@
 #include "star-simd.h"
 #include <stdlib.h>
 // 128 for multi-stage
-#define StateSize 20
-#define SIMDStateSize 3
-
-#define Step 2
+#define StateSize 30
+#define SIMDStateSize 5
+#define Step 6
+#define SIMDStep 4
 #define MultiPrefetch 0
+
 struct State {
   uint32_t key;
   uint32_t pb_off;
@@ -60,7 +61,7 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
         state[k].stage = 3;
       }
     }
-    switch (state[k].stage) {
+    switch (state[k].stage & 1) {
       case 1: {  // init state for each tuple
                  ///////// step 1: load new tuples' address offsets
                  // the offset should be within MAX_32INT_
@@ -106,11 +107,11 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
         // combine new hash value with old hash value
         state[k].ht_off =
             _mm512_mask_mov_epi32(state[k].ht_off, m_new_cells, v_cell_hash);
-        state[k].stage = 0;
+        state[k].stage = 2;
 #if MultiPrefetch
         ht_pos = (uint32_t*)&state[k].ht_off;
         for (int i = 0; i < vector_scale; ++i) {
-          _mm_prefetch((char*)(ht[0]->addr + ht_pos[i]), _MM_HINT_T2);
+          _mm_prefetch((char*)(ht[0]->addr + ht_pos[i]), _MM_HINT_T1);
         }
 #else
         ht_pos = (uint32_t*)&state[k].ht_off;
@@ -121,8 +122,8 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
       } break;
       case 0: {
 #if MultiPrefetch
-        if (k + Step < SIMDStateSize) {
-          ht_pos = (uint32_t*)&state[k + Step].ht_off;
+        if ((k + SIMDStep < SIMDStateSize) && state[k + SIMDStep].stage == 2) {
+          ht_pos = (uint32_t*)&state[k + SIMDStep].ht_off;
           for (int i = 0; i < vector_scale; ++i) {
             _mm_prefetch((char*)(ht[0]->addr + ht_pos[i]), _MM_HINT_T0);
           }
@@ -332,7 +333,7 @@ uint64_t SIMDGPProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
 #if MultiPrefetch
       ht_pos = (uint32_t*)&state[k].ht_off;
       for (int i = 0; i < vector_scale; ++i) {
-        _mm_prefetch((char*)(ht[0]->addr + ht_pos[i]), _MM_HINT_T2);
+        _mm_prefetch((char*)(ht[0]->addr + ht_pos[i]), _MM_HINT_T1);
       }
 #else
       ht_pos = (uint32_t*)&state[k].ht_off;
@@ -343,8 +344,8 @@ uint64_t SIMDGPProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
     }
     for (k = 0; (k < SIMDStateSize); ++k) {
 #if MultiPrefetch
-      if (k + Step < SIMDStateSize) {
-        ht_pos = (uint32_t*)&state[k + Step].ht_off;
+      if (k + SIMDStep < SIMDStateSize) {
+        ht_pos = (uint32_t*)&state[k + SIMDStep].ht_off;
         for (int i = 0; i < vector_scale; ++i) {
           _mm_prefetch((char*)(ht[0]->addr + ht_pos[i]), _MM_HINT_T0);
         }

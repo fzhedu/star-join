@@ -10,6 +10,7 @@ int PrefetchingTest(int argc, char** argv) {
   if (argc > 1) {
     times = atoi(argv[1]);
   }
+
   int deltaT = 0;
   gettimeofday(&t1, NULL);
   // table_factor = (rand() << 1) | 1;
