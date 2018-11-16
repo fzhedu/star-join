@@ -6,9 +6,9 @@
 //#include "ssb-test-sf10.cpp"
 //#include "tpcds-test.cpp"
 //#include "tpch-test.cpp"
-//#include "ssb-test-sf100.cpp"
+#include "ssb-test-sf100.cpp"
 //#include "ssb-test-sf50.cpp"
-#include "prefetching-test.cpp"
+//#include "prefetching-test.cpp"
 
 int main(int argc, char** argv) {
   if (argc > 1) {
@@ -29,11 +29,11 @@ int main(int argc, char** argv) {
 
   // TpcdsTest(argc, argv);
   // TpchTest(argc, argv);
-  // SsbTestSf100(argc, argv);
+  SsbTestSf100(argc, argv);
   // SsbTestSf50(argc, argv);
   // SsbTestSf10(argc, argv);
   // SsbTestSf1(argc, argv);
   // SsbTestSf2(argc, argv);
-  PrefetchingTest(argc, argv);
+  // PrefetchingTest(argc, argv);
   return 0;
 }

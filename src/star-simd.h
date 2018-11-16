@@ -43,12 +43,18 @@ typedef unsigned short uint16_t;
 // for sequencal access
 #define SEQPREFETCH 0
 // +64
-#define PDIS 384
+#define PDIS 128
 #define EARLYBREAK 1
 // filter out
-float selectity = 0.1;
+float selectity = 0.5;
 #define INVALID 2147483647
 #define up64(a) (a - (a % 64) + 64)
+
+#define StateSize 30
+#define SIMDStateSize 3
+#define Step 6
+#define SIMDStep 4
+#define MultiPrefetch 0
 struct Table {
   string name;
   string path;
@@ -85,7 +91,7 @@ pthread_mutex_t mutex;
 uint64_t global_probe_corsur = 0, global_matched = 0;
 #define probe_step 1024 * 1024  // 1048576
 int thread_num = 1;
-int ht_num = 1;
+int ht_num = 4;
 int times = 1;
 // typedef unsigned long long uint64_t;
 

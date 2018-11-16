@@ -1,11 +1,6 @@
 #include "star-simd.h"
 #include <stdlib.h>
 // 128 for multi-stage
-#define StateSize 30
-#define SIMDStateSize 5
-#define Step 6
-#define SIMDStep 4
-#define MultiPrefetch 0
 
 struct State {
   uint32_t key;
@@ -59,14 +54,16 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
       if (state[k].m_have_tuple == 0 && state[k].stage != 3) {
         ++done;
         state[k].stage = 3;
+        ++k;
+        continue;
       }
     }
-    switch (state[k].stage & 1) {
+    switch (state[k].stage) {
       case 1: {  // init state for each tuple
                  ///////// step 1: load new tuples' address offsets
                  // the offset should be within MAX_32INT_
 // the tail depends on the number of joins and tuples in each bucket
-#if !SEQPREFETCH
+#if SEQPREFETCH
         _mm_prefetch((char*)(pb->start + cur_offset + PDIS), _MM_HINT_T0);
         _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 64), _MM_HINT_T0);
         _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 128), _MM_HINT_T0);

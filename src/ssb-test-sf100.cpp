@@ -169,13 +169,26 @@ lo_orderdate
   deltaT = (t2.tv_sec - t1.tv_sec) * 1000000 + t2.tv_usec - t1.tv_usec;
   printf("++++ build hashtable costs time (ms) = %lf\n", deltaT * 1.0 / 1000);
 
-  TestSet(&lineorder, "handprobe", times, LinearHandProbe, thread_num);
-  TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
-  TestSet(&lineorder, "SIMD512Hor", times, Linear512ProbeHor, thread_num);
-  TestSet(&lineorder, "SIMD512", times, Linear512Probe, thread_num);
-  // TestSet(&lineorder, "SIMD256Hor", times, LinearSIMDProbeHor, thread_num);
-  // TestSet(&lineorder, "SIMD256", times, LinearSIMDProbe, thread_num);
-
+  int id = 0;
+  puts("input choice:");
+  while (scanf("%d", &id) != EOF) {
+    if (id == 0) {
+      TestSet(&lineorder, "handprobe", times, LinearHandProbe, thread_num);
+    } else if (id == 1) {
+      TestSet(&lineorder, "tupleAtTime", times, TupleAtATimeProbe, thread_num);
+    } else if (id == 2) {
+      TestSet(&lineorder, "SIMD512Hor", times, Linear512ProbeHor, thread_num);
+    } else if (id == 3) {
+      TestSet(&lineorder, "SIMD512", times, Linear512Probe, thread_num);
+    } else if (id == 4) {
+      TestSet(&lineorder, "PrefetchLinear512Probe", times,
+              PrefetchLinear512Probe, thread_num);
+    } else if (id >= 100) {
+      puts("end!");
+      break;
+    }
+    puts("input choice again:");
+  }
   free(global_addr);
   free(dim_date.start);
   free(customer.start);
