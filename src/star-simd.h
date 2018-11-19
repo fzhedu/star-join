@@ -24,7 +24,7 @@
 #include <map>
 using namespace std;
 // CPU or PHI
-#define FAVX512 1
+#define FAVX512 0
 #if !FAVX512
 typedef unsigned long long uint64_t;
 typedef unsigned int uint32_t;

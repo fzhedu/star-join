@@ -656,9 +656,10 @@ uint64_t PrefetchLinear512ProbeHor(Table* pb, HashTable** ht, int ht_num,
           v_join_num = _mm512_set1_epi32(ht_num),
           v_base_offset_upper =
               _mm512_set1_epi32(pb->tuple_num * pb->tuple_size),
-          v_right_index, v_base_offset, v_left_size = _mm512_set1_epi32(8),
-          ht_cell, v_factor = _mm512_set1_epi32(table_factor), v_ht_cell_offset,
-          v_shift, v_buckets_minus_1, v_cell_hash, v_ht_global_addr_offset,
+          v_right_index, v_base_offset,
+          v_left_size = _mm512_set1_epi32(ht[0]->tuple_size), ht_cell,
+          v_factor = _mm512_set1_epi32(table_factor), v_ht_cell_offset, v_shift,
+          v_buckets_minus_1, v_cell_hash, v_ht_global_addr_offset,
           v_neg_one512 = _mm512_set1_epi32(-1), v_tuple_off, v_payloads_off,
           v_zero512 = _mm512_set1_epi32(0), v_one = _mm512_set1_epi32(1);
   __attribute__((aligned(64)))
