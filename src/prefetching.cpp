@@ -63,7 +63,7 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
                  ///////// step 1: load new tuples' address offsets
                  // the offset should be within MAX_32INT_
 // the tail depends on the number of joins and tuples in each bucket
-#if SEQPREFETCH
+#if !SEQPREFETCH
         _mm_prefetch((char*)(pb->start + cur_offset + PDIS), _MM_HINT_T0);
         _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 64), _MM_HINT_T0);
         _mm_prefetch((char*)(pb->start + cur_offset + PDIS + 128), _MM_HINT_T0);
@@ -104,7 +104,7 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
         // combine new hash value with old hash value
         state[k].ht_off =
             _mm512_mask_mov_epi32(state[k].ht_off, m_new_cells, v_cell_hash);
-        state[k].stage = 2;
+        state[k].stage = 0;
 #if MultiPrefetch
         ht_pos = (uint32_t*)&state[k].ht_off;
         for (int i = 0; i < vector_scale; ++i) {
@@ -118,7 +118,7 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
 #endif
       } break;
       case 0: {
-#if MultiPrefetch
+#if MultiPrefetch  ///
         if ((k + SIMDStep < SIMDStateSize) && state[k + SIMDStep].stage == 2) {
           ht_pos = (uint32_t*)&state[k + SIMDStep].ht_off;
           for (int i = 0; i < vector_scale; ++i) {
@@ -126,7 +126,7 @@ uint64_t SIMDAMACProbe(Table* pb, HashTable** ht, int ht_num, char* payloads) {
           }
         }
 #endif
-#if RESULTS1
+#if RESULTS
         ht_cell =
             _mm512_mask_i32gather_epi32(v_neg_one512, state[k].m_have_tuple,
                                         state[k].ht_off, ht[0]->global_addr, 1);

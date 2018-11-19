@@ -183,9 +183,11 @@ lo_orderdate
     } else if (id == 4) {
       TestSet(&lineorder, "PrefetchLinear512Probe", times,
               PrefetchLinear512Probe, thread_num);
-    } else if (id >= 100) {
-      puts("end!");
-      break;
+    } else if (id == 5) {
+      TestSet(&lineorder, "PrefetchLinear512ProbeHor", times,
+              PrefetchLinear512ProbeHor, thread_num);
+    } else {
+      puts("continue 0~5!");
     }
     puts("input choice again:");
   }

@@ -51,7 +51,7 @@ float selectity = 0.5;
 #define up64(a) (a - (a % 64) + 64)
 
 #define StateSize 30
-#define SIMDStateSize 3
+#define SIMDStateSize 4
 #define Step 6
 #define SIMDStep 4
 #define MultiPrefetch 0
