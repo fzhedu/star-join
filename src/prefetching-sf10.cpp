@@ -51,7 +51,11 @@ int PrefetchingTest(int argc, char** argv) {
   Table orders;
   orders.name = "orders";
   orders.tuple_num = 15000000;
+#if KNL
+  orders.path = "/home/zhfang/data/tpc-h/sf10/1partition/T4G0P0";
+#else
   orders.path = "/home/claims/data/tpc-h/sf10/1partition/T4G0P0";
+#endif
   orders.raw_tuple_size = 8;
   int array17[10] = {0, 4};
   SetVectorValue(array17, 2, orders.offset);
@@ -70,7 +74,11 @@ int PrefetchingTest(int argc, char** argv) {
   Table lineitem;
   lineitem.name = "lineitem";
   lineitem.tuple_num = 59986052;
+#if KNL
+  lineitem.path = "/home/zhfang/data/tpc-h/sf10/1partition/T6G0P0";
+#else
   lineitem.path = "/home/claims/data/tpc-h/sf10/1partition/T6G0P0";
+#endif
   lineitem.raw_tuple_size = 16;
   int array9[10] = {0, 4, 8, 0, 12};
   SetVectorValue(array9, 5, lineitem.offset);

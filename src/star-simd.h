@@ -24,8 +24,9 @@
 #include <map>
 using namespace std;
 // CPU or PHI
+#define KNL 0
 #define FAVX512 0
-#if !FAVX512
+#if (FAVX512 || KNL)
 typedef unsigned long long uint64_t;
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
